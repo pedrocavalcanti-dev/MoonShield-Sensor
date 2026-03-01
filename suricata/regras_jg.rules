@@ -51,11 +51,7 @@ alert tcp $HOME_NET any -> $HOME_NET [80,443,8080,8443,9000,9090] (msg:"JG RECON
 # A6 — Scan UDP multiporta (discovery de servicos)
 alert udp $HOME_NET any -> $HOME_NET any (msg:"JG RECON: Scan UDP para muitas portas internas"; detection_filter:track by_src, count 60, seconds 20; classtype:attempted-recon; priority:3; metadata: affected_product Any, jarvis_guard yes, stage recon; sid:9900006; rev:1;)
 
-# A7 — ARP suspeito (possivel ARP scan / spoof / flood)
-# NOTA: alert arp no Suricata nao suporta detection_filter nem variaveis de rede.
-#       Para threshold em ARP, use /etc/suricata/threshold.conf com:
-#       threshold gen_id 1, sig_id 9900007, type threshold, track by_src, count 80, seconds 10
-alert arp any any -> any any (msg:"JG RECON: Atividade ARP suspeita detectada (possivel arp scan ou spoof)"; classtype:bad-unknown; priority:3; metadata: affected_product Network_Device, jarvis_guard yes, stage recon; sid:9900007; rev:2;)
+# A7 — SID 9900007 RESERVADO — alert arp nao existe no Suricata 7, linha ignorada
 
 # A8 — Conexoes para portas altas incomuns (fingerprinting de firewall)
 alert tcp $HOME_NET any -> $HOME_NET [31337,4444,1337,12345,54321] (msg:"JG RECON: Conexao para porta alta suspeita na LAN (fingerprinting)"; flow:to_server; flags:S; classtype:attempted-recon; priority:2; metadata: affected_product Any, jarvis_guard yes, stage recon; sid:9900008; rev:1;)
