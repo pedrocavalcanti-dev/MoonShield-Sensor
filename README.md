@@ -107,8 +107,7 @@ pip install -r requirements.txt
 ### Passo 4 — Execute
 
 ```bash
-sudo python3 sensor.py
-```
+sudo python3 jg_sensor.py```
 
 > **Primeira execução:** o wizard abre automaticamente.  
 > Informe a URL do Jarvis Guard, o nome do sensor e a severidade mínima.  
@@ -125,8 +124,7 @@ cd Jarvis-Guard-Sensor
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-sudo python3 sensor.py
-```
+sudo python3 jg_sensor.py```
 
 ---
 
