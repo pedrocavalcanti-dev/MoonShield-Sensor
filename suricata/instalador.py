@@ -38,7 +38,7 @@ REGRAS_ORIGEM   = _AQUI / "regras_jg.rules"
 EVE_JSON        = Path("/var/log/suricata/eve.json")
 
 # Interfaces virtuais que devem ser ignoradas na detecção
-IFACES_IGNORADAS  = {"lo", "docker0", "podman0", "virbr0"}
+IFACES_IGNORADAS   = {"lo", "docker0", "podman0", "virbr0"}
 PREFIXOS_IGNORADOS = ("br-", "veth", "tun", "wg", "docker", "virbr", "vmnet")
 
 # ── Imports visuais do nucleo ─────────────────────────────────────────────────
@@ -250,14 +250,6 @@ def _localizar_suricata_yaml() -> Path | None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _detectar_topologia() -> dict:
-    """
-    Lê o sistema e retorna topologia detectada automaticamente:
-      iface_wan    — interface do default route (saída pra internet)
-      iface_lan    — interface LAN sugerida para captura
-      todas_ifaces — lista de dicts com info de cada interface
-      home_net     — lista de CIDRs das interfaces internas
-      dns_interno  — IP do DNS interno detectado
-    """
     iface_wan  = _detectar_wan()
     todas      = _listar_interfaces_com_ip()
     home_net   = _extrair_cidrs(todas, excluir_iface=iface_wan)
@@ -274,7 +266,6 @@ def _detectar_topologia() -> dict:
 
 
 def _detectar_wan() -> str:
-    """Detecta interface WAN pelo default route (`ip route show default`)."""
     _, out, _ = run_cmd("ip route show default")
     tokens = out.split()
     for i, t in enumerate(tokens):
@@ -284,11 +275,6 @@ def _detectar_wan() -> str:
 
 
 def _listar_interfaces_com_ip() -> list:
-    """
-    Usa `ip -o -4 addr show` para listar interfaces com IPv4.
-    Ignora loopback e interfaces virtuais.
-    Retorna lista de dicts: {nome, ip, cidr, rede, estado}
-    """
     _, out, _ = run_cmd("ip -o -4 addr show")
     ifaces = []
     vistas = set()
@@ -306,7 +292,6 @@ def _listar_interfaces_com_ip() -> list:
         if nome in vistas:
             continue
 
-        # Localiza "inet <ip/cidr>"
         try:
             idx     = partes.index("inet")
             ip_cidr = partes[idx + 1]
@@ -329,15 +314,10 @@ def _listar_interfaces_com_ip() -> list:
 
 
 def _extrair_cidrs(ifaces: list, excluir_iface: str = "") -> list:
-    """Retorna lista de CIDRs das redes internas (exclui a WAN)."""
     return [i["rede"] for i in ifaces if i["nome"] != excluir_iface]
 
 
 def _sugerir_lan(ifaces: list, iface_wan: str) -> str:
-    """
-    Sugere a interface LAN: primeira interface que não é WAN,
-    priorizando interfaces com estado 'up'.
-    """
     candidatos = [i for i in ifaces if i["nome"] != iface_wan]
     ups = [i for i in candidatos if i["estado"] == "up"]
     if ups:
@@ -348,12 +328,6 @@ def _sugerir_lan(ifaces: list, iface_wan: str) -> str:
 
 
 def _detectar_dns_interno(ifaces: list, iface_lan: str) -> str:
-    """
-    Detecta DNS interno:
-    1) Lê /etc/resolv.conf
-    2) Se um nameserver estiver na subnet da LAN, usa ele
-    3) Senão, usa o IP da interface LAN como fallback
-    """
     nameservers = []
     try:
         for linha in Path("/etc/resolv.conf").read_text().splitlines():
@@ -390,14 +364,9 @@ def _detectar_dns_interno(ifaces: list, iface_lan: str) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _confirmar_topologia(topo: dict) -> dict | None:
-    """
-    Exibe a topologia detectada e permite ao usuário confirmar ou ajustar.
-    Retorna dict atualizado, ou None se cancelado.
-    """
     linha_texto("TOPOLOGIA DE REDE DETECTADA", C_TITULO, "centro")
     linha_vazia()
 
-    # Exibe interfaces detectadas
     if topo["todas_ifaces"]:
         linha_texto("Interfaces com IP encontradas:", C_DESTAQUE)
         for iface in topo["todas_ifaces"]:
@@ -546,7 +515,6 @@ def _patch_home_net(conteudo: str, home_net: list) -> str:
             nova.append(linha)
 
     if not ok:
-        # Insere após address-groups:
         nova2 = []
         for linha in nova:
             nova2.append(linha)
@@ -656,19 +624,38 @@ def _patch_af_packet(conteudo: str, interface: str) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _testar_suricata(yaml_path: Path) -> tuple:
+    """
+    Roda suricata -T e verifica se há erros REAIS (linhas com prefixo 'E:').
+
+    Por que não usar o exit code:
+      O Suricata 7 retorna exit code != 0 quando há arquivos de regra
+      referenciados no yaml que não existem (ex: suricata.rules das ET rules
+      não instaladas). Isso gera apenas 'W:' (warning), não 'E:' (error).
+      Tratar esse warning como falha impede a instalação mesmo com as regras
+      JG perfeitamente válidas.
+
+    Critério de falha: ao menos uma linha começando com 'E:' no output.
+    """
     linha_texto("Validando configuração (suricata -T)...", C_DIM)
-    code, out, err = run_cmd(f"suricata -T -c {yaml_path} 2>&1")
+    _, out, err = run_cmd(f"suricata -T -c {yaml_path} 2>&1")
     saida = (out + err).strip()
 
-    if code == 0:
+    # Coleta apenas linhas de erro real (prefixo "E:")
+    erros = [
+        l.strip()
+        for l in saida.split("\n")
+        if l.strip().startswith("E:")
+    ]
+
+    if not erros:
+        # Mostra warnings encontrados para informação, mas não falha
+        warnings = [l.strip() for l in saida.split("\n") if l.strip().startswith("W:")]
+        if warnings:
+            for w in warnings[:3]:   # no máximo 3 para não poluir
+                linha_texto(f"  aviso: {w}", C_DIM)
         return True, "OK"
 
-    for linha in saida.split("\n"):
-        l = linha.strip().lower()
-        if "error" in l or "fatal" in l:
-            return False, linha.strip()
-
-    return False, saida[:200] if saida else "Erro desconhecido"
+    return False, erros[0]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
