@@ -12,12 +12,13 @@ from nucleo.utilitarios import agora
 # ══════════════════════════════════════════════════════════════════════════════
 
 _stats = {
-    "seen":    0,
-    "sent":    0,
-    "erros":   0,
-    "buffer":  0,
-    "ultimo":  "—",
-    "rodando": False,
+    "seen":       0,
+    "sent":       0,
+    "erros":      0,
+    "buffer":     0,
+    "ultimo":     "—",
+    "rodando":    False,
+    "heartbeats": 0,   # novo: conta heartbeats enviados
 }
 _stats_lock = threading.Lock()
 
@@ -51,12 +52,13 @@ def tela_sensor(cfg: dict):
 
     # Reset stats
     with _stats_lock:
-        _stats["seen"]    = 0
-        _stats["sent"]    = 0
-        _stats["erros"]   = 0
-        _stats["buffer"]  = 0
-        _stats["ultimo"]  = "—"
-        _stats["rodando"] = True
+        _stats["seen"]       = 0
+        _stats["sent"]       = 0
+        _stats["erros"]      = 0
+        _stats["buffer"]     = 0
+        _stats["ultimo"]     = "—"
+        _stats["heartbeats"] = 0
+        _stats["rodando"]    = True
 
     t_display = threading.Thread(target=_loop_display, args=(cfg,), daemon=True)
     t_display.start()
@@ -92,6 +94,7 @@ def _loop_display(cfg: dict):
             erros  = _stats["erros"]
             buf    = _stats["buffer"]
             ultimo = _stats["ultimo"]
+            hb     = _stats["heartbeats"]
 
         limpar()
         topo()
@@ -105,6 +108,7 @@ def _loop_display(cfg: dict):
         linha_texto(f"  Eventos enviados  : {sent:,}", C_OK)
         linha_texto(f"  Erros de envio    : {erros:,}", C_ERRO if erros > 0 else C_DIM)
         linha_texto(f"  Buffer pendente   : {buf}", C_DIM)
+        linha_texto(f"  Heartbeats        : {hb}", C_DIM)
         linha_texto(f"  Último envio      : {ultimo}", C_DIM)
         separador()
         linha_texto("  Pressione Ctrl+C para parar o sensor", C_DIM)
@@ -116,6 +120,12 @@ def _loop_display(cfg: dict):
 # ══════════════════════════════════════════════════════════════════════════════
 # LOOP PRINCIPAL DO SENSOR
 # ══════════════════════════════════════════════════════════════════════════════
+
+# Intervalo máximo entre envios (mesmo sem eventos).
+# O Django considera o sensor offline após ONLINE_THRESHOLD_SEGUNDOS (models.py).
+# Mantenha HEARTBEAT_INTERVAL bem abaixo desse threshold.
+HEARTBEAT_INTERVAL = 30   # segundos — envia POST a cada 30s mesmo sem eventos
+
 
 def _loop_sensor(cfg: dict):
     eve_path      = cfg["eve_path"]
@@ -138,8 +148,13 @@ def _loop_sensor(cfg: dict):
 
             line = f.readline()
 
+            # ── Sem linha nova no arquivo ────────────────────────────────────
             if not line:
-                if buffer and (time.time() - last_send) >= batch_timeout:
+                agora_ts = time.time()
+                tempo_desde_envio = agora_ts - last_send
+
+                # Envia se: buffer cheio E timeout atingido
+                if buffer and tempo_desde_envio >= batch_timeout:
                     ok = _enviar(jarvis_url, sensor_nome, buffer, cfg)
                     with _stats_lock:
                         if ok:
@@ -149,10 +164,23 @@ def _loop_sensor(cfg: dict):
                             _stats["erros"] += len(buffer)
                         _stats["buffer"] = 0
                     buffer.clear()
-                    last_send = time.time()
+                    last_send = agora_ts
+
+                # ── HEARTBEAT: envia POST vazio se ficou muito tempo sem enviar
+                elif not buffer and tempo_desde_envio >= HEARTBEAT_INTERVAL:
+                    ok = _enviar(jarvis_url, sensor_nome, [], cfg)
+                    with _stats_lock:
+                        if ok:
+                            _stats["heartbeats"] += 1
+                            _stats["ultimo"]      = agora()
+                        else:
+                            _stats["erros"] += 1
+                    last_send = agora_ts
+
                 time.sleep(0.2)
                 continue
 
+            # ── Processamento normal da linha ────────────────────────────────
             line = line.strip()
             if not line:
                 continue
@@ -180,7 +208,7 @@ def _loop_sensor(cfg: dict):
                 _stats["buffer"] = len(buffer)
 
             batch_cheio   = len(buffer) >= batch_size
-            tempo_expirou = (time.time() - last_send) >= batch_timeout and buffer
+            tempo_expirou = (time.time() - last_send) >= batch_timeout
 
             if batch_cheio or tempo_expirou:
                 ok = _enviar(jarvis_url, sensor_nome, buffer, cfg)
@@ -213,6 +241,7 @@ def _enviar(url: str, sensor_nome: str, buffer: list, cfg: dict) -> bool:
         )
         if 200 <= resp.status_code < 300:
             data = resp.json()
+            # Salva o token na primeira vez que o servidor retorna
             if data.get("token") and not cfg.get("token"):
                 cfg["token"] = data["token"]
                 salvar_config(cfg)
@@ -234,6 +263,7 @@ def modo_auto(cfg: dict):
     print(f"[{agora()}] Jarvis : {cfg['jarvis_url']}")
     print(f"[{agora()}] Sensor : {cfg['sensor_nome']}")
     print(f"[{agora()}] Eve    : {cfg['eve_path']}")
+    print(f"[{agora()}] Heartbeat a cada {HEARTBEAT_INTERVAL}s")
 
     if not cfg["jarvis_url"]:
         print(f"[{agora()}] ERRO: URL do Jarvis não configurada. Execute sem --auto primeiro.")
@@ -246,16 +276,22 @@ def modo_auto(cfg: dict):
     with _stats_lock:
         _stats["rodando"] = True
 
-    def heartbeat():
+    def heartbeat_log():
+        """Apenas loga stats periodicamente no stdout (systemd/journald)."""
         while True:
-            time.sleep(30)
+            time.sleep(60)
             with _stats_lock:
                 s  = _stats["seen"]
                 e  = _stats["sent"]
                 er = _stats["erros"]
-            print(f"[{agora()}] heartbeat | vistos={s} | enviados={e} | erros={er}", flush=True)
+                hb = _stats["heartbeats"]
+            print(
+                f"[{agora()}] stats | vistos={s} | enviados={e} | "
+                f"erros={er} | heartbeats={hb}",
+                flush=True,
+            )
 
-    threading.Thread(target=heartbeat, daemon=True).start()
+    threading.Thread(target=heartbeat_log, daemon=True).start()
 
     try:
         _loop_sensor(cfg)
