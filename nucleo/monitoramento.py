@@ -124,7 +124,15 @@ def _loop_display(cfg: dict):
 # Intervalo máximo entre envios (mesmo sem eventos).
 # O Django considera o sensor offline após ONLINE_THRESHOLD_SEGUNDOS (models.py).
 # Mantenha HEARTBEAT_INTERVAL bem abaixo desse threshold.
-HEARTBEAT_INTERVAL = 30   # segundos — envia POST a cada 30s mesmo sem eventos
+# Intervalo do heartbeat (POST vazio quando não há eventos novos).
+# Deve ser MENOR que Sensor.ONLINE_THRESHOLD_SEGUNDOS no Django (300s).
+# Com 30s, o sensor tem ~10 chances de reconexão antes de virar offline.
+HEARTBEAT_INTERVAL = 30
+
+# Timeout do batch: após quantos segundos sem linha nova enviar o buffer pendente.
+# Valor baixo = eventos chegam mais rápido ao painel. Padrão: 2s.
+# Sobrescrito pelo cfg["batch_timeout"] se configurado.
+DEFAULT_BATCH_TIMEOUT = 2
 
 
 def _loop_sensor(cfg: dict):
@@ -132,7 +140,7 @@ def _loop_sensor(cfg: dict):
     jarvis_url    = cfg["jarvis_url"] + "/incidentes/api/ingest/"
     sensor_nome   = cfg["sensor_nome"]
     batch_size    = int(cfg.get("batch_size", 20))
-    batch_timeout = int(cfg.get("batch_timeout", 5))
+    batch_timeout = int(cfg.get("batch_timeout", DEFAULT_BATCH_TIMEOUT))
     min_sev       = int(cfg.get("min_severity", 4))
 
     buffer    = []
@@ -153,8 +161,8 @@ def _loop_sensor(cfg: dict):
                 agora_ts = time.time()
                 tempo_desde_envio = agora_ts - last_send
 
-                # Envia se: buffer cheio E timeout atingido
                 if buffer and tempo_desde_envio >= batch_timeout:
+                    # Envia buffer pendente mesmo que não esteja cheio
                     ok = _enviar(jarvis_url, sensor_nome, buffer, cfg)
                     with _stats_lock:
                         if ok:
@@ -166,8 +174,9 @@ def _loop_sensor(cfg: dict):
                     buffer.clear()
                     last_send = agora_ts
 
-                # ── HEARTBEAT: envia POST vazio se ficou muito tempo sem enviar
                 elif not buffer and tempo_desde_envio >= HEARTBEAT_INTERVAL:
+                    # Heartbeat: POST vazio apenas quando buffer está limpo
+                    # Mantém last_seen atualizado no Django → sensor não fica offline
                     ok = _enviar(jarvis_url, sensor_nome, [], cfg)
                     with _stats_lock:
                         if ok:
@@ -177,7 +186,7 @@ def _loop_sensor(cfg: dict):
                             _stats["erros"] += 1
                     last_send = agora_ts
 
-                time.sleep(0.2)
+                time.sleep(0.1)
                 continue
 
             # ── Processamento normal da linha ────────────────────────────────
