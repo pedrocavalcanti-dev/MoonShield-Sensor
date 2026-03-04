@@ -8,12 +8,12 @@ Fluxo:
   2  Garantir Suricata (instalar se necessário)
   2b Baixar regras Emerging Threats (ET Open) via suricata-update
   3  Localizar suricata.yaml
-  4  Detectar topologia de rede (WAN / LAN / HOME_NET / DNS)
-  5  Confirmar topologia com o usuário
+  4  Listar interfaces e perguntar UMA SÓ COISA: qual monitorar
+  5  Confirmar com resumo simples
   6  Copiar regras JG (sempre sobrescrever)
   7  Backup do suricata.yaml
   8  Aplicar patches (HOME_NET, rule-files, eve-log, af-packet)
-  8b Sanitizar interfaces (remove eth0 e outros placeholders do yaml padrão)
+  8b Sanitizar yaml (remove eth0 e placeholders, sobrescreve af-packet inteiro)
   9  Validar com suricata -T  →  restaurar backup se falhar
   10 Habilitar + reiniciar serviço
   11 Verificar eve.json
@@ -40,7 +40,7 @@ REGRAS_DEST     = REGRAS_DEST_DIR / "jg.rules"
 REGRAS_ORIGEM   = _AQUI / "regras_jg.rules"
 EVE_JSON        = Path("/var/log/suricata/eve.json")
 
-# Interfaces virtuais que devem ser ignoradas na detecção automática
+# Interfaces virtuais que devem ser ignoradas
 IFACES_IGNORADAS   = {"lo", "docker0", "podman0", "virbr0"}
 PREFIXOS_IGNORADOS = ("br-", "veth", "tun", "wg", "docker", "virbr", "vmnet")
 
@@ -87,13 +87,10 @@ def executar_instalacao(cfg: dict) -> dict:
 
     separador()
 
-    # ── 4 ─ Detectar topologia ────────────────────────────────────────────────
-    topo = _detectar_topologia()
-
-    # ── 5 ─ Confirmar topologia com o usuário ─────────────────────────────────
-    topo = _confirmar_topologia(topo)
+    # ── 4 ─ Escolher interface de monitoramento (UMA PERGUNTA SÓ) ────────────
+    topo = _escolher_interface()
     if topo is None:
-        print_resultado(False, "Configuração de topologia cancelada. Abortando.")
+        print_resultado(False, "Nenhuma interface selecionada. Abortando.")
         aguardar_enter()
         return cfg
 
@@ -145,12 +142,12 @@ def executar_instalacao(cfg: dict) -> dict:
     else:
         print_resultado(False, msg_eve)
 
-    # ── Persistir topologia no config.json ───────────────────────────────────
+    # ── Persistir topologia no config.json ────────────────────────────────────
     cfg["suricata_yaml"]     = str(yaml_path)
     cfg["interface_captura"] = topo["iface_lan"]
-    cfg["interface_wan"]     = topo["iface_wan"]
+    cfg["interface_wan"]     = topo.get("iface_wan", "")
     cfg["home_net"]          = topo["home_net"]
-    cfg["dns_interno"]       = topo["dns_interno"]
+    cfg["dns_interno"]       = topo.get("dns_interno", "")
     cfg["eve_path"]          = str(EVE_JSON)
 
     from nucleo.configuracao import salvar_config
@@ -227,29 +224,15 @@ def _instalar_suricata() -> bool:
 def _atualizar_regras_et() -> bool:
     """
     Baixa e instala as regras Emerging Threats Open via suricata-update.
-
-    As regras ET Open são gratuitas e cobrem ~40.000 assinaturas de:
-      • Malware / C2 conhecidos
-      • Scans e exploits
-      • DNS/TLS/HTTP suspeitos
-      • Botnets, mineradores, etc.
-
-    As regras JG (jarvis-guard) são adicionadas POR CIMA das ET,
-    cobrindo comportamentos específicos da rede doméstica/corporativa
-    que as ET não detectam (bypass DNS, beaconing, etc.).
-
-    Não falha a instalação se suricata-update não estiver disponível —
-    o sensor funciona com apenas as regras JG, só com menos cobertura.
+    Não falha a instalação se indisponível — o sensor funciona só com as JG.
     """
     separador()
     linha_texto("REGRAS EMERGING THREATS (ET Open)", C_DESTAQUE)
     linha_vazia()
-    linha_texto("  O Suricata precisa de regras para saber o que é suspeito.", C_DIM)
     linha_texto("  As regras ET Open são gratuitas e cobrem ~40.000 ameaças.", C_DIM)
     linha_texto("  As regras JG do Jarvis Guard serão adicionadas por cima.", C_DIM)
     linha_vazia()
 
-    # ── Garante que suricata-update está instalado ────────────────────────────
     if not cmd_existe("suricata-update"):
         linha_texto("suricata-update não encontrado. Tentando instalar...", C_DIM)
         mgr = detectar_gerenciador_pacote()
@@ -260,31 +243,25 @@ def _atualizar_regras_et() -> bool:
             "pacman": "pacman -S --noconfirm suricata-update",
         }
         if mgr and mgr in cmds_update:
-            code, _, err = run_cmd(cmds_update[mgr])
+            code, _, _ = run_cmd(cmds_update[mgr])
             if code != 0:
-                # Tenta via pip como fallback
                 run_cmd("pip3 install suricata-update")
 
     if not cmd_existe("suricata-update"):
         print_resultado(False, "suricata-update não disponível.")
         linha_texto("  Continuando apenas com regras JG (cobertura reduzida).", C_AVISO)
-        linha_texto("  Para instalar manualmente: pip3 install suricata-update", C_DIM)
         linha_vazia()
         return False
 
-    # ── Habilita fonte ET Open (gratuita, sem registro) ───────────────────────
     linha_texto("Habilitando fonte Emerging Threats Open...", C_DIM)
     run_cmd("suricata-update enable-source et/open")
 
-    # ── Baixa e instala as regras ─────────────────────────────────────────────
     linha_texto("Baixando regras ET Open... (pode demorar 1-3 min)", C_AVISO)
-    linha_texto("Primeira vez: ~40.000 regras (~15 MB)", C_DIM)
     linha_vazia()
 
     code, out, err = run_cmd("suricata-update --no-reload 2>&1")
 
     if code == 0:
-        # Extrai estatísticas do output do suricata-update
         total_regras = 0
         for linha in (out + err).split("\n"):
             if "rules added" in linha.lower() or "loaded" in linha.lower():
@@ -299,14 +276,12 @@ def _atualizar_regras_et() -> bool:
             print_resultado(True, "Regras ET Open baixadas e instaladas.")
 
         linha_texto("  Fonte: Proofpoint ET Open (gratuita)", C_DIM)
-        linha_texto("  Atualização automática: execute suricata-update periodicamente", C_DIM)
         linha_vazia()
         return True
     else:
         saida = (out + err)[:200]
         print_resultado(False, f"suricata-update falhou: {saida}")
         linha_texto("  Continuando apenas com regras JG.", C_AVISO)
-        linha_texto("  Tente manualmente: sudo suricata-update", C_DIM)
         linha_vazia()
         return False
 
@@ -343,26 +318,120 @@ def _localizar_suricata_yaml() -> Path | None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 4 ─ DETECÇÃO DE TOPOLOGIA
+# 4 ─ ESCOLHER INTERFACE (UMA PERGUNTA SÓ)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _detectar_topologia() -> dict:
-    iface_wan  = _detectar_wan()
-    todas      = _listar_interfaces_com_ip()
-    home_net   = _extrair_cidrs(todas, excluir_iface=iface_wan)
-    iface_lan  = _sugerir_lan(todas, iface_wan)
-    dns_intern = _detectar_dns_interno(todas, iface_lan)
+def _escolher_interface() -> dict | None:
+    """
+    Lista as interfaces disponíveis com IP e tráfego RX.
+    Usuário escolhe apenas o NÚMERO da interface que quer monitorar.
+    WAN, HOME_NET e DNS são deduzidos automaticamente — sem perguntas extras.
+    """
+    ifaces = _listar_interfaces_com_ip_e_rx()
+
+    if not ifaces:
+        print_resultado(False, "Nenhuma interface com IP encontrada.")
+        return None
+
+    # ── Detecta WAN pela rota padrão (só para informação, não pergunta) ───────
+    iface_wan = _detectar_wan()
+
+    linha_texto("INTERFACES DE REDE DISPONÍVEIS", C_TITULO, "centro")
+    linha_vazia()
+    linha_texto("  Escolha a interface da rede que você quer monitorar.", C_DIM)
+    linha_texto("  Normalmente é a interface da rede interna (laboratório, LAN).", C_DIM)
+    linha_vazia()
+
+    # ── Exibe tabela de interfaces ────────────────────────────────────────────
+    print("\033[36m║\033[0m  " + "-" * 58)
+    print(
+        "\033[36m║\033[0m  "
+        + f"{'Nº':<4} {'Interface':<12} {'IP / CIDR':<22} {'RX (pkts)':<14} {'Info'}"
+    )
+    print("\033[36m║\033[0m  " + "-" * 58)
+
+    for i, iface in enumerate(ifaces, start=1):
+        rx_str  = f"{iface['rx_pkts']:,}" if iface['rx_pkts'] >= 0 else "?"
+        info    = ""
+        cor     = C_NORMAL
+
+        if iface["nome"] == iface_wan:
+            info = "← internet (WAN)"
+            cor  = C_DIM
+        elif iface["estado"] != "up":
+            info = f"[{iface['estado']}]"
+            cor  = C_DIM
+
+        print(
+            "\033[36m║\033[0m  "
+            + cor
+            + f"  {i:<3} {iface['nome']:<12} {iface['cidr']:<22} {rx_str:<14} {info}"
+            + "\033[0m"
+        )
+
+    print("\033[36m║\033[0m  " + "-" * 58)
+    linha_vazia()
+
+    # ── Sugere a interface com mais RX que não seja WAN ───────────────────────
+    candidatos = [f for f in ifaces if f["nome"] != iface_wan and f["estado"] == "up"]
+    if candidatos:
+        melhor  = max(candidatos, key=lambda f: f["rx_pkts"])
+        sugest  = str(ifaces.index(melhor) + 1)
+    else:
+        sugest = "1"
+
+    # ── Uma única pergunta ────────────────────────────────────────────────────
+    while True:
+        resp = input_campo("Qual interface monitorar? (número)", sugest).strip()
+        if not resp.isdigit():
+            linha_texto("  Digite apenas o número da interface.", C_AVISO)
+            continue
+        idx = int(resp) - 1
+        if 0 <= idx < len(ifaces):
+            escolhida = ifaces[idx]
+            break
+        linha_texto(f"  Número inválido. Digite entre 1 e {len(ifaces)}.", C_AVISO)
+
+    # ── Deduz HOME_NET e DNS do CIDR da interface escolhida ───────────────────
+    home_net   = [str(ipaddress.IPv4Network(escolhida["cidr"], strict=False))]
+    dns_intern = escolhida["ip"]   # IP da própria interface como DNS padrão
+
+    # ── Resumo simples para confirmar ─────────────────────────────────────────
+    linha_vazia()
+    separador()
+    linha_texto("RESUMO", C_DESTAQUE)
+    linha_vazia()
+    linha_texto(f"  Monitorar : {escolhida['nome']}  ({escolhida['cidr']})", C_OK)
+    linha_texto(f"  HOME_NET  : {home_net[0]}", C_DIM)
+    linha_texto(f"  DNS padrão: {dns_intern}", C_DIM)
+    linha_vazia()
+    linha_texto("  O que vai acontecer:", C_AVISO)
+    linha_texto("    • Regras JG serão copiadas para o sistema", C_DIM)
+    linha_texto("    • suricata.yaml será reescrito com esta interface", C_DIM)
+    linha_texto("    • eth0 e outros placeholders serão removidos", C_DIM)
+    linha_texto("    • Configuração validada com suricata -T", C_DIM)
+    linha_texto("    • Suricata reiniciado", C_DIM)
+    linha_vazia()
+
+    confirma = input_campo("Confirmar e aplicar? (s/n)", "s")
+    if confirma.strip().lower() != "s":
+        return None
 
     return {
+        "iface_lan":    escolhida["nome"],
         "iface_wan":    iface_wan,
-        "iface_lan":    iface_lan,
-        "todas_ifaces": todas,
         "home_net":     home_net,
         "dns_interno":  dns_intern,
+        "todas_ifaces": ifaces,
     }
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# HELPERS DE DETECÇÃO DE INTERFACES
+# ══════════════════════════════════════════════════════════════════════════════
+
 def _detectar_wan() -> str:
+    """Detecta interface WAN pela rota padrão do sistema."""
     _, out, _ = run_cmd("ip route show default")
     tokens = out.split()
     for i, t in enumerate(tokens):
@@ -371,12 +440,47 @@ def _detectar_wan() -> str:
     return ""
 
 
-def _listar_interfaces_com_ip() -> list:
-    _, out, _ = run_cmd("ip -o -4 addr show")
-    ifaces = []
-    vistas = set()
+def _listar_interfaces_com_ip_e_rx() -> list:
+    """
+    Retorna lista de interfaces com IP, CIDR, estado e contagem de pacotes RX.
+    Exclui lo, docker, bridges virtuais, etc.
+    """
+    _, out_addr, _ = run_cmd("ip -o -4 addr show")
+    _, out_stats, _ = run_cmd("ip -s link show")
 
-    for linha in out.splitlines():
+    # ── Parse de RX por interface ─────────────────────────────────────────────
+    rx_map = {}
+    linhas_stats = out_stats.splitlines()
+    iface_atual  = None
+    aguarda_rx   = False
+
+    for linha in linhas_stats:
+        linha = linha.strip()
+        # Linha de interface: "2: enp0s3: <...>"
+        m = re.match(r"^\d+:\s+(\S+?):", linha)
+        if m:
+            iface_atual = m.group(1)
+            aguarda_rx  = False
+            continue
+        # Linha "RX:  bytes packets ..."
+        if "RX:" in linha and iface_atual:
+            aguarda_rx = True
+            continue
+        # Linha seguinte ao RX: tem os números
+        if aguarda_rx and iface_atual:
+            numeros = linha.split()
+            if len(numeros) >= 2:
+                try:
+                    rx_map[iface_atual] = int(numeros[1])   # pkts
+                except ValueError:
+                    rx_map[iface_atual] = 0
+            aguarda_rx = False
+
+    # ── Parse de endereços ────────────────────────────────────────────────────
+    ifaces  = []
+    vistas  = set()
+
+    for linha in out_addr.splitlines():
         partes = linha.split()
         if len(partes) < 4:
             continue
@@ -393,7 +497,6 @@ def _listar_interfaces_com_ip() -> list:
             idx     = partes.index("inet")
             ip_cidr = partes[idx + 1]
             ip      = ip_cidr.split("/")[0]
-            rede    = str(ipaddress.IPv4Network(ip_cidr, strict=False))
         except (ValueError, IndexError):
             continue
 
@@ -405,181 +508,30 @@ def _listar_interfaces_com_ip() -> list:
         except Exception:
             estado = "?"
 
-        ifaces.append({"nome": nome, "ip": ip, "cidr": ip_cidr, "rede": rede, "estado": estado})
+        ifaces.append({
+            "nome":     nome,
+            "ip":       ip,
+            "cidr":     ip_cidr,
+            "estado":   estado,
+            "rx_pkts":  rx_map.get(nome, -1),
+        })
 
     return ifaces
 
 
-def _extrair_cidrs(ifaces: list, excluir_iface: str = "") -> list:
-    return [i["rede"] for i in ifaces if i["nome"] != excluir_iface]
-
-
-def _sugerir_lan(ifaces: list, iface_wan: str) -> str:
-    candidatos = [i for i in ifaces if i["nome"] != iface_wan]
-    ups = [i for i in candidatos if i["estado"] == "up"]
-    if ups:
-        return ups[0]["nome"]
-    if candidatos:
-        return candidatos[0]["nome"]
-    return ""
-
-
-def _detectar_dns_interno(ifaces: list, iface_lan: str) -> str:
-    nameservers = []
-    try:
-        for linha in Path("/etc/resolv.conf").read_text().splitlines():
-            linha = linha.strip()
-            if linha.startswith("nameserver"):
-                partes = linha.split()
-                if len(partes) >= 2:
-                    nameservers.append(partes[1])
-    except Exception:
-        pass
-
-    iface_info = next((i for i in ifaces if i["nome"] == iface_lan), None)
-
-    if iface_info and nameservers:
-        try:
-            rede_lan = ipaddress.IPv4Network(iface_info["cidr"], strict=False)
-            for ns in nameservers:
-                try:
-                    if ipaddress.IPv4Address(ns) in rede_lan:
-                        return ns
-                except ValueError:
-                    pass
-        except ValueError:
-            pass
-
-    if iface_info:
-        return iface_info["ip"]
-
-    return nameservers[0] if nameservers else ""
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 5 ─ CONFIRMAR TOPOLOGIA COM O USUÁRIO
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _confirmar_topologia(topo: dict) -> dict | None:
-    linha_texto("TOPOLOGIA DE REDE DETECTADA", C_TITULO, "centro")
-    linha_vazia()
-
-    # ── Exibir interfaces encontradas ────────────────────────────────────────
-    if topo["todas_ifaces"]:
-        linha_texto("Interfaces de rede encontradas nesta máquina:", C_DESTAQUE)
-        linha_vazia()
-        for iface in topo["todas_ifaces"]:
-            marcador = ""
-            if iface["nome"] == topo["iface_wan"]:
-                marcador = "  ← WAN  (saída para internet — detectada pela rota padrão)"
-            elif iface["nome"] == topo["iface_lan"]:
-                marcador = "  ← LAN  (sugerida para captura)"
-            linha_texto(
-                f"  {iface['nome']:<12} {iface['cidr']:<20} [{iface['estado']}]{marcador}",
-                C_DIM,
-            )
-        linha_vazia()
-    else:
-        linha_texto("Nenhuma interface com IP detectada.", C_AVISO)
-        linha_vazia()
-
-    linha_texto("COMO FUNCIONA O MONITORAMENTO:", C_DESTAQUE)
-    linha_texto("  O Suricata vai ficar 'escutando' o tráfego de rede em modo passivo.", C_DIM)
-    linha_texto("  Ele NÃO bloqueia nada — apenas analisa e gera alertas.", C_DIM)
-    linha_texto("  Você configura UMA interface interna (LAN) para captura.", C_DIM)
-    linha_texto("  Todo tráfego dos dispositivos da rede passa por ela.", C_DIM)
-    linha_vazia()
-    linha_texto("  Por que não monitorar a WAN também?", C_AVISO)
-    linha_texto("  Monitorar WAN + LAN geraria eventos duplicados (mesmo pacote aparece 2x).", C_DIM)
-    linha_texto("  Na LAN você já vê tudo que entra e sai, com IPs internos legíveis.", C_DIM)
-    linha_vazia()
-    separador()
-
-    # ── PASSO 1: WAN ─────────────────────────────────────────────────────────
-    linha_texto("PASSO 1 de 4 — Interface WAN", C_DESTAQUE)
-    linha_vazia()
-    linha_texto("  O que é: a interface conectada ao roteador / internet.", C_DIM)
-    linha_texto("  Detectamos automaticamente pela rota padrão do sistema.", C_DIM)
-    linha_texto("  O Suricata NÃO vai monitorar esta interface.", C_DIM)
-    linha_texto("  Ela é registrada apenas para documentação da topologia.", C_DIM)
-    linha_vazia()
-    wan = input_campo("Interface WAN", topo["iface_wan"] or "")
-    topo["iface_wan"] = wan.strip()
-    linha_vazia()
-
-    # ── PASSO 2: LAN (captura) ────────────────────────────────────────────────
-    linha_texto("PASSO 2 de 4 — Interface de Captura (LAN)", C_DESTAQUE)
-    linha_vazia()
-    linha_texto("  O que é: a interface conectada à sua rede interna.", C_DIM)
-    linha_texto("  É AQUI que o Suricata vai monitorar o tráfego.", C_DIM)
-    linha_texto("  Exemplos comuns: enp0s3, eth0, ens18", C_DIM)
-    linha_vazia()
-    linha_texto("  ATENÇÃO: se errar esta interface, o Suricata não", C_AVISO)
-    linha_texto("  vai capturar nenhum pacote e o eve.json ficará vazio.", C_AVISO)
-    linha_vazia()
-    lan = input_campo("Interface de captura (LAN)", topo["iface_lan"] or "")
-    if not lan.strip():
-        linha_texto("Interface de captura é obrigatória. Abortando.", C_ERRO)
-        return None
-    topo["iface_lan"] = lan.strip()
-    linha_vazia()
-
-    # ── PASSO 3: HOME_NET ─────────────────────────────────────────────────────
-    linha_texto("PASSO 3 de 4 — HOME_NET (redes internas)", C_DESTAQUE)
-    linha_vazia()
-    linha_texto("  O que é: os CIDRs da sua rede interna.", C_DIM)
-    linha_texto("  O Suricata usa isso para saber quais IPs são 'seus'", C_DIM)
-    linha_texto("  e quais são externos — isso afeta quais alertas disparam.", C_DIM)
-    linha_vazia()
-    linha_texto("  Exemplos:", C_DIM)
-    linha_texto("    192.168.1.0/24   → rede doméstica comum", C_DIM)
-    linha_texto("    10.0.0.0/8       → rede corporativa ampla", C_DIM)
-    linha_texto("    192.168.1.0/24,10.10.0.0/16  → múltiplas redes", C_DIM)
-    linha_vazia()
-    home_padrao = ",".join(topo["home_net"]) if topo["home_net"] else "192.168.0.0/16"
-    home_str    = input_campo("HOME_NET", home_padrao)
-    topo["home_net"] = [c.strip() for c in home_str.split(",") if c.strip()]
-    linha_vazia()
-
-    # ── PASSO 4: DNS interno ──────────────────────────────────────────────────
-    linha_texto("PASSO 4 de 4 — DNS Interno", C_DESTAQUE)
-    linha_vazia()
-    linha_texto("  O que é: o IP do servidor DNS que seus dispositivos usam.", C_DIM)
-    linha_texto("  Pode ser um Pi-hole, AdGuard Home, ou o próprio roteador.", C_DIM)
-    linha_vazia()
-    linha_texto("  Para que serve: o Jarvis Guard tem uma regra que detecta", C_DIM)
-    linha_texto("  dispositivos ignorando seu DNS interno (bypass DNS).", C_DIM)
-    linha_texto("  Se um aparelho consultar 8.8.8.8 em vez do seu DNS,", C_DIM)
-    linha_texto("  isso gera um alerta.", C_DIM)
-    linha_vazia()
-    linha_texto("  Se não tiver DNS interno, pressione Enter para deixar vazio.", C_DIM)
-    linha_vazia()
-    dns = input_campo("DNS interno", topo["dns_interno"] or "")
-    topo["dns_interno"] = dns.strip()
-    linha_vazia()
-
-    # ── Resumo para confirmação ───────────────────────────────────────────────
-    separador()
-    linha_texto("RESUMO — revise antes de aplicar", C_DESTAQUE)
-    linha_vazia()
-    linha_texto(f"  WAN (só referência)  : {topo['iface_wan'] or '(não informado)'}", C_DIM)
-    linha_texto(f"  Captura (LAN)        : {topo['iface_lan']}", C_OK)
-    linha_texto(f"  HOME_NET             : {', '.join(topo['home_net'])}", C_OK)
-    linha_texto(f"  DNS interno          : {topo['dns_interno'] or '(não configurado)'}", C_DIM)
-    linha_vazia()
-    linha_texto("  O que vai acontecer a seguir:", C_AVISO)
-    linha_texto("    • Regras JG serão copiadas para o sistema", C_DIM)
-    linha_texto("    • suricata.yaml receberá os patches necessários", C_DIM)
-    linha_texto("    • Interfaces eth0/placeholder serão removidas do yaml", C_DIM)
-    linha_texto("    • A configuração será validada com suricata -T", C_DIM)
-    linha_texto("    • O serviço Suricata será reiniciado", C_DIM)
-    linha_vazia()
-
-    confirma = input_campo("Confirmar e aplicar? (s/n)", "s")
-    if confirma.strip().lower() != "s":
-        return None
-
-    return topo
+def _listar_interfaces_com_ip() -> list:
+    """Compatibilidade com diagnostico.py — retorna formato original."""
+    ifaces_rx = _listar_interfaces_com_ip_e_rx()
+    return [
+        {
+            "nome":   i["nome"],
+            "ip":     i["ip"],
+            "cidr":   i["cidr"],
+            "rede":   str(ipaddress.IPv4Network(i["cidr"], strict=False)),
+            "estado": i["estado"],
+        }
+        for i in ifaces_rx
+    ]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -629,10 +581,9 @@ def _aplicar_todos_patches(yaml_path: Path, topo: dict) -> bool:
     conteudo = _patch_home_net(conteudo, topo["home_net"])
     conteudo = _patch_rule_files(conteudo)
     conteudo = _patch_eve_log(conteudo)
-    conteudo = _patch_af_packet(conteudo, topo["iface_lan"])
 
-    # ── 8b ─ Sanitizar: remove eth0 e outros placeholders do yaml padrão ─────
-    conteudo = _sanitizar_interfaces_captura(conteudo, topo["iface_lan"])
+    # ── 8b ─ Sanitiza e reescreve af-packet inteiro com interface correta ─────
+    conteudo = _sanitizar_e_patch_af_packet(conteudo, topo["iface_lan"])
 
     try:
         yaml_path.write_text(conteudo, encoding="utf-8")
@@ -680,9 +631,7 @@ def _patch_home_net(conteudo: str, home_net: list) -> str:
 def _patch_rule_files(conteudo: str) -> str:
     """
     Garante que jarvis-guard/jg.rules aparece em rule-files.
-    As regras ET já são gerenciadas pelo suricata-update e ficam em
-    /var/lib/suricata/rules/ — o suricata-update cuida de registrá-las.
-    Aqui só garantimos que as regras JG customizadas estão incluídas.
+    As regras ET são gerenciadas pelo suricata-update.
     """
     MARCADOR = "jarvis-guard/jg.rules"
     ENTRADA  = "  - jarvis-guard/jg.rules"
@@ -744,110 +693,48 @@ def _patch_eve_log(conteudo: str) -> str:
     return "\n".join(nova)
 
 
-def _patch_af_packet(conteudo: str, interface: str) -> str:
+def _sanitizar_e_patch_af_packet(conteudo: str, interface: str) -> str:
     """
-    Garante a interface LAN correta no bloco af-packet.
+    Reescreve a seção af-packet INTEIRA com apenas a interface escolhida.
 
-    BUG CORRIGIDO: a versão anterior ignorava a nova interface se o marcador
-    JG já existia no yaml (ex: ao rodar o instalador pela segunda vez com
-    interface diferente). Agora sempre atualiza a linha de interface.
+    Remove eth0, eth1, default e qualquer outro placeholder que venha
+    no suricata.yaml padrão do Debian/Ubuntu. Neutraliza pcap: também.
 
-    Nota: após este patch, _sanitizar_interfaces_captura() é chamado para
-    remover qualquer eth0/placeholder que ainda reste no yaml padrão.
+    Isso garante que o Suricata não tenta capturar em eth0 que não existe,
+    o que causava kernel_packets: 0 e o sensor nunca enviava eventos.
     """
-    MARCADOR = "# == Jarvis Guard: af-packet =="
-
-    # ── Bloco JG já existe: atualiza apenas a linha da interface ─────────────
-    if MARCADOR in conteudo:
-        linhas       = conteudo.split("\n")
-        nova         = []
-        dentro_bloco = False
-
-        for linha in linhas:
-            if MARCADOR in linha:
-                dentro_bloco = True
-                nova.append(linha)
-                continue
-
-            if dentro_bloco and linha.strip().startswith("- interface:"):
-                indent = len(linha) - len(linha.lstrip())
-                nova.append(" " * indent + f"- interface: {interface}")
-                dentro_bloco = False
-                continue
-
-            nova.append(linha)
-
-        return "\n".join(nova)
-
-    # ── Bloco JG não existe ainda: cria ──────────────────────────────────────
-    AF_ENTRY = (
-        f"\n  {MARCADOR}\n"
-        f"  - interface: {interface}\n"
-        f"    cluster-id: 99\n"
-        f"    cluster-type: cluster_flow\n"
-        f"    defrag: yes\n"
-    )
-
-    if "af-packet:" in conteudo:
-        linhas = conteudo.split("\n")
-        nova   = []
-        for linha in linhas:
-            nova.append(linha)
-            if "af-packet:" in linha:
-                nova.append(AF_ENTRY)
-        return "\n".join(nova)
-
-    return conteudo + f"\naf-packet:\n{AF_ENTRY}"
-
-
-def _sanitizar_interfaces_captura(conteudo: str, iface_ok: str) -> str:
-    """
-    Remove eth0 e outros placeholders do suricata.yaml padrão do Debian/Ubuntu.
-
-    Problema: o yaml padrão do Suricata vem com exemplos de interface (geralmente
-    eth0) em af-packet: e pcap:. Mesmo que o _patch_af_packet() insira o bloco JG
-    com a interface correta, os outros blocos sobram e o Suricata tenta criar
-    threads para eth0, o que gera erros "interface not found" no log.
-
-    Solução:
-      1. Substitui a seção af-packet: inteira por um bloco limpo com iface_ok.
-      2. Neutraliza a seção pcap: (coloca interface: none) para não capturar em
-         paralelo em outra interface fantasma.
-      3. Remove linhas soltas "- interface: ethX" que sobram fora dessas seções.
-    """
-    # ── 1) Reescreve seção af-packet: inteira ────────────────────────────────
-    # O yaml padrão pode ter múltiplos itens (eth0, eth1, default...).
-    # Substituímos tudo por um bloco único e limpo.
+    # ── 1) Reescreve af-packet: inteiro com bloco limpo ───────────────────────
     bloco_af = (
         "af-packet:\n"
-        "  # == Jarvis Guard: af-packet ==\n"
-        f"  - interface: {iface_ok}\n"
+        "  # == Jarvis Guard ==\n"
+        f"  - interface: {interface}\n"
         "    threads: auto\n"
         "    cluster-id: 99\n"
         "    cluster-type: cluster_flow\n"
         "    defrag: yes\n"
     )
-    conteudo = re.sub(
-        r"(?m)^af-packet:\n(?:^[ \t].*\n)*",
-        bloco_af,
-        conteudo,
-    )
 
-    # ── 2) Neutraliza seção pcap: ─────────────────────────────────────────────
-    # pcap: é o modo de captura alternativo; se sobrar com eth0 lá dentro,
-    # o Suricata pode tentar usá-lo também dependendo do runmode.
+    if re.search(r"(?m)^af-packet:", conteudo):
+        conteudo = re.sub(
+            r"(?m)^af-packet:\n(?:^[ \t].*\n)*",
+            bloco_af,
+            conteudo,
+        )
+    else:
+        conteudo += f"\n{bloco_af}"
+
+    # ── 2) Neutraliza pcap: (modo de captura alternativo) ─────────────────────
     bloco_pcap = "pcap:\n  - interface: none\n"
-    conteudo = re.sub(
-        r"(?m)^pcap:\n(?:^[ \t].*\n)*",
-        bloco_pcap,
-        conteudo,
-    )
+    if re.search(r"(?m)^pcap:", conteudo):
+        conteudo = re.sub(
+            r"(?m)^pcap:\n(?:^[ \t].*\n)*",
+            bloco_pcap,
+            conteudo,
+        )
+    else:
+        conteudo += f"\n{bloco_pcap}"
 
-    # ── 3) Remove linhas soltas "- interface: ethX" fora dos blocos JG ───────
-    # Isso captura casos raros onde o yaml tem entradas de interface espalhadas.
-    conteudo = re.sub(r"(?m)^[ \t]*-[ \t]*interface:[ \t]*eth\d+[ \t]*$\n?", "", conteudo)
-
-    print_resultado(True, f"Sanitização OK — apenas '{iface_ok}' em af-packet.")
+    print_resultado(True, f"af-packet configurado → interface: {interface}")
     return conteudo
 
 
@@ -857,15 +744,8 @@ def _sanitizar_interfaces_captura(conteudo: str, iface_ok: str) -> str:
 
 def _testar_suricata(yaml_path: Path) -> tuple:
     """
-    Roda suricata -T e verifica se há erros REAIS (linhas com prefixo 'E:').
-
-    Por que não usar o exit code diretamente:
-      O Suricata 7 retorna exit code != 0 quando há arquivos de regra
-      referenciados no yaml que não existem. Isso gera apenas 'W:' (warning),
-      não 'E:' (error). Tratar esse warning como falha bloquearia a instalação
-      mesmo com as regras JG perfeitamente válidas.
-
-    Critério de falha: ao menos uma linha começando com 'E:' no output.
+    Roda suricata -T e verifica erros reais (linhas com prefixo 'E:').
+    Warnings (W:) não bloqueiam a instalação.
     """
     linha_texto("Validando configuração com suricata -T ...", C_DIM)
     linha_texto("(isso pode levar alguns segundos)", C_DIM)
@@ -881,7 +761,7 @@ def _testar_suricata(yaml_path: Path) -> tuple:
     if not erros:
         warnings = [l.strip() for l in saida.split("\n") if l.strip().startswith("W:")]
         if warnings:
-            linha_texto("  Avisos encontrados (não impedem o funcionamento):", C_AVISO)
+            linha_texto("  Avisos (não impedem o funcionamento):", C_AVISO)
             for w in warnings[:3]:
                 linha_texto(f"    {w}", C_DIM)
         return True, "OK"

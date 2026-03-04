@@ -1,8 +1,8 @@
 # =============================================================================
-# Jarvis Guard — Ruleset v1.1 (Compatível)
+# Jarvis Guard — Ruleset v1.2 (Compatível)
 # Arquivo destino: /var/lib/suricata/rules/jarvis-guard/jg.rules
 #
-# SID range reservado Jarvis Guard: 9900001 – 9900050
+# SID range reservado Jarvis Guard: 9900001 – 9900060
 # Foco: Gateway passivo / IDS local
 #
 # Observações:
@@ -10,6 +10,8 @@
 #   NXDOMAIN em massa deve ser calculado no Jarvis Guard (Django) via eve.json.
 # - Evitamos "content vazio" em http.user_agent/tls.sni pois pode quebrar.
 # - Mantemos classtype apenas de lista padrão comum.
+# - ARP / novos dispositivos: implementado no monitoramento.py via scapy.
+# - TLS sem SNI: melhor detectado no Django via eve.json (tls.sni ausente).
 # =============================================================================
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -22,7 +24,7 @@ alert tcp $HOME_NET any -> $HOME_NET any (msg:"JG RECON: Possivel host sweep TCP
 alert udp $HOME_NET any -> $HOME_NET 161 (msg:"JG RECON: Varredura SNMP (UDP/161) na rede interna"; detection_filter:track by_src, count 12, seconds 10; classtype:attempted-recon; priority:2; metadata: jarvis_guard yes, stage recon; sid:9900004; rev:1;)
 alert tcp $HOME_NET any -> $HOME_NET [80,443,8080,8443,9000,9090] (msg:"JG RECON: Varredura de paineis web admin na rede interna"; flow:to_server; flags:S; detection_filter:track by_src, count 30, seconds 20; classtype:web-application-attack; priority:2; metadata: jarvis_guard yes, stage recon; sid:9900005; rev:1;)
 alert udp $HOME_NET any -> $HOME_NET any (msg:"JG RECON: Scan UDP para muitas portas internas"; detection_filter:track by_src, count 60, seconds 20; classtype:attempted-recon; priority:3; metadata: jarvis_guard yes, stage recon; sid:9900006; rev:1;)
-# 9900007 reservado (ARP rule pode quebrar em versões/compilações diferentes)
+# 9900007 reservado (ARP rule pode quebrar em versões/compilações diferentes — implementado no monitoramento.py)
 alert tcp $HOME_NET any -> $HOME_NET [31337,4444,1337,12345,54321] (msg:"JG RECON: Conexao para porta alta suspeita na LAN (fingerprinting)"; flow:to_server; flags:S; classtype:attempted-recon; priority:2; metadata: jarvis_guard yes, stage recon; sid:9900008; rev:1;)
 
 
@@ -59,14 +61,11 @@ alert tcp $HOME_NET any -> $HOME_NET 5432 (msg:"JG LATERAL/DB: Pico de tentativa
 alert udp $HOME_NET any -> [8.8.8.8,8.8.4.4] 53 (msg:"JG DNS POLICY: Bypass DNS - cliente usando Google DNS (8.8.8.x)"; detection_filter:track by_src, count 3, seconds 60; classtype:policy-violation; priority:3; metadata: jarvis_guard yes, tag bypass-dns; sid:9900023; rev:1;)
 alert udp $HOME_NET any -> [1.1.1.1,1.0.0.1] 53 (msg:"JG DNS POLICY: Bypass DNS - cliente usando Cloudflare DNS (1.1.1.x)"; detection_filter:track by_src, count 3, seconds 60; classtype:policy-violation; priority:3; metadata: jarvis_guard yes, tag bypass-dns; sid:9900024; rev:1;)
 alert udp $HOME_NET any -> [9.9.9.9,149.112.112.112] 53 (msg:"JG DNS POLICY: Bypass DNS - cliente usando Quad9 (9.9.9.x)"; detection_filter:track by_src, count 3, seconds 60; classtype:policy-violation; priority:3; metadata: jarvis_guard yes, tag bypass-dns; sid:9900025; rev:1;)
-
 alert udp $HOME_NET any -> $EXTERNAL_NET 53 (msg:"JG DNS: Volume alto de consultas DNS externas (possivel DGA/erro)"; detection_filter:track by_src, count 120, seconds 60; classtype:misc-activity; priority:3; metadata: jarvis_guard yes; sid:9900026; rev:1;)
-
 # D5 — NXDOMAIN em massa (IMPLEMENTAR NO DJANGO)
 # Motivo: keyword rcode varia por versão. Suricata engine não é o melhor lugar para isso.
 # Você vai contar NXDOMAIN via eve.json no Jarvis Guard.
 alert udp $HOME_NET any -> $EXTERNAL_NET 53 (msg:"JG DNS: Alto volume de respostas/consultas DNS (verificar NXDOMAIN no painel)"; detection_filter:track by_src, count 200, seconds 60; classtype:misc-activity; priority:3; metadata: jarvis_guard yes, tag nxdomain-candidate; sid:9900027; rev:2;)
-
 alert dns $HOME_NET any -> $EXTERNAL_NET any (msg:"JG DNS: Consulta a ip-api.com (descoberta de IP externo)"; dns.query; content:"ip-api.com"; nocase; classtype:misc-activity; priority:2; metadata: jarvis_guard yes, tag external-ip-lookup; sid:9900028; rev:1;)
 alert dns $HOME_NET any -> $EXTERNAL_NET any (msg:"JG DNS: Consulta a ifconfig.me (descoberta de IP externo)"; dns.query; content:"ifconfig.me"; nocase; classtype:misc-activity; priority:2; metadata: jarvis_guard yes, tag external-ip-lookup; sid:9900029; rev:1;)
 alert dns $HOME_NET any -> $EXTERNAL_NET any (msg:"JG DNS: Consulta a api.ipify.org (descoberta de IP externo)"; dns.query; content:"api.ipify.org"; nocase; classtype:misc-activity; priority:2; metadata: jarvis_guard yes, tag external-ip-lookup; sid:9900030; rev:1;)
@@ -92,19 +91,11 @@ alert tcp $HOME_NET any -> $EXTERNAL_NET [9001,9030,9050,9051] (msg:"JG POLICY: 
 
 alert tcp $HOME_NET any -> $EXTERNAL_NET any (msg:"JG ANOMALIA: Muitas conexoes TCP externas (possivel bot)"; flow:to_server; flags:S; detection_filter:track by_src, count 300, seconds 60; classtype:misc-activity; priority:3; metadata: jarvis_guard yes, tag bot; sid:9900039; rev:2;)
 alert icmp $HOME_NET any -> $EXTERNAL_NET any (msg:"JG ANOMALIA: Volume alto de ICMP externo (possivel tunel ICMP)"; itype:8; detection_filter:track by_src, count 80, seconds 60; classtype:misc-activity; priority:3; metadata: jarvis_guard yes, tag icmp-tunnel; sid:9900040; rev:2;)
-
-# TLS beaconing: exige tráfego TLS parseável; mantemos simples + flow established
 alert tls $HOME_NET any -> $EXTERNAL_NET any (msg:"JG ANOMALIA: TLS repetitivo (possivel beaconing)"; flow:to_server,established; detection_filter:track by_src, count 120, seconds 300; classtype:misc-activity; priority:3; metadata: jarvis_guard yes, tag beaconing; sid:9900041; rev:2;)
-
 alert dns $HOME_NET any -> $EXTERNAL_NET any (msg:"JG ANOMALIA: Consulta DNS frequente ao mesmo dominio (possivel beaconing)"; detection_filter:track by_src, count 60, seconds 120; classtype:misc-activity; priority:3; metadata: jarvis_guard yes, tag beaconing; sid:9900042; rev:1;)
-
 alert tcp $HOME_NET any -> $EXTERNAL_NET [1337,4444,6667,6697,31337,9001,55553,54321,12345] (msg:"JG C2: Conexao para porta externa suspeita (C2/backdoor/IRC)"; flow:to_server,established; classtype:trojan-activity; priority:2; metadata: jarvis_guard yes, category c2; sid:9900043; rev:1;)
-
-# UA vazio: removido (pode quebrar/é fraco). Substituímos por "user-agent suspeito genérico"
 alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"JG ANOMALIA: HTTP com User-Agent incomum (indicativo)"; flow:to_server,established; http.user_agent; pcre:"/^(?:$|\\s{0,2})$/"; classtype:misc-activity; priority:3; metadata: jarvis_guard yes, tag ua-suspeito; sid:9900044; rev:2;)
-
 alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"JG SUSPEITO: Download de executavel (.exe) via HTTP"; flow:to_server,established; http.uri; content:".exe"; nocase; classtype:misc-activity; priority:2; metadata: jarvis_guard yes, tag exe-download; sid:9900045; rev:1;)
-
 alert dns $HOME_NET any -> $EXTERNAL_NET any (msg:"JG ANOMALIA: Dominio com padrao DGA (muitos numeros)"; dns.query; pcre:"/^[a-z0-9]{18,}\\.[a-z]{2,6}$/i"; classtype:misc-activity; priority:3; metadata: jarvis_guard yes, tag dga; sid:9900046; rev:1;)
 
 
@@ -114,8 +105,32 @@ alert dns $HOME_NET any -> $EXTERNAL_NET any (msg:"JG ANOMALIA: Dominio com padr
 
 alert udp $HOME_NET any -> $EXTERNAL_NET 443 (msg:"JG TLS/QUIC: Trafego QUIC detectado (UDP/443)"; classtype:misc-activity; priority:4; metadata: jarvis_guard yes, tag quic; sid:9900047; rev:1;)
 alert tls $HOME_NET any -> $EXTERNAL_NET any (msg:"JG TLS: SNI com subdomain numerico (indicativo suspeito)"; flow:to_server,established; tls.sni; pcre:"/^\\d{4,}\\./"; classtype:misc-activity; priority:2; metadata: jarvis_guard yes, tag suspicious-sni; sid:9900048; rev:2;)
-
-# TLS sem SNI: removido (content vazio pode quebrar). Isso é melhor no Django olhando tls.sni ausente no eve.json.
+# TLS sem SNI: removido (content vazio pode quebrar). Melhor no Django via eve.json (tls.sni ausente).
 alert tls $HOME_NET any -> $EXTERNAL_NET any (msg:"JG TLS: Conexao TLS com poucos dados de hostname (verificar no painel)"; flow:to_server,established; classtype:misc-activity; priority:3; metadata: jarvis_guard yes, tag no-sni-candidate; sid:9900049; rev:2;)
-
 alert udp $HOME_NET any -> $EXTERNAL_NET 443 (msg:"JG TLS/QUIC: Volume alto de QUIC (UDP/443) - possivel bypass"; detection_filter:track by_src, count 200, seconds 60; classtype:misc-activity; priority:3; metadata: jarvis_guard yes, tag quic-volume; sid:9900050; rev:2;)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GRUPO H — NMAP / OS FINGERPRINT  (9900051–9900053)
+# ─────────────────────────────────────────────────────────────────────────────
+
+alert tcp $HOME_NET any -> $HOME_NET any (msg:"JG RECON: Possivel Nmap NULL scan (nenhuma flag TCP)"; flags:0; classtype:attempted-recon; priority:2; metadata: jarvis_guard yes, stage recon, tag nmap; sid:9900051; rev:1;)
+alert tcp $HOME_NET any -> $HOME_NET any (msg:"JG RECON: Possivel Nmap XMAS scan (FIN+PSH+URG)"; flags:FPU; classtype:attempted-recon; priority:2; metadata: jarvis_guard yes, stage recon, tag nmap; sid:9900052; rev:1;)
+alert tcp $HOME_NET any -> $HOME_NET any (msg:"JG RECON: Flag TCP anomala SYN+FIN (probe Nmap/OS fingerprint)"; flags:SF; classtype:attempted-recon; priority:2; metadata: jarvis_guard yes, stage recon, tag nmap; sid:9900053; rev:1;)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GRUPO I — DNS TUNNELING  (9900054–9900055)
+# ─────────────────────────────────────────────────────────────────────────────
+
+alert udp $HOME_NET any -> any 53 (msg:"JG DNS: Payload UDP/DNS muito grande (possivel DNS tunneling)"; dsize:>150; classtype:misc-activity; priority:2; metadata: jarvis_guard yes, tag dns-tunnel; sid:9900054; rev:1;)
+alert dns $HOME_NET any -> $EXTERNAL_NET any (msg:"JG DNS: Label longo em consulta DNS (possivel DNS tunneling)"; dns.query; pcre:"/[a-z0-9\\-]{50,}\\./i"; classtype:misc-activity; priority:2; metadata: jarvis_guard yes, tag dns-tunnel; sid:9900055; rev:1;)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GRUPO J — HOST SWEEP REFINADO  (9900056)
+# ─────────────────────────────────────────────────────────────────────────────
+
+alert tcp $HOME_NET any -> $HOME_NET any (msg:"JG LATERAL: Host sweep interno agressivo (1 fonte muitos destinos)"; flow:to_server; flags:S; detection_filter:track by_src, count 50, seconds 10; classtype:attempted-recon; priority:2; metadata: jarvis_guard yes, stage recon, stage lateral; sid:9900056; rev:1;)
+
+# 9900057–9900060 reservados (ARP/novos dispositivos — implementar no monitoramento.py)
