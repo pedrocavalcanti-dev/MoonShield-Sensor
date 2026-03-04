@@ -13,12 +13,14 @@ Fluxo:
   6  Copiar regras JG (sempre sobrescrever)
   7  Backup do suricata.yaml
   8  Aplicar patches (HOME_NET, rule-files, eve-log, af-packet)
+  8b Sanitizar interfaces (remove eth0 e outros placeholders do yaml padrão)
   9  Validar com suricata -T  →  restaurar backup se falhar
   10 Habilitar + reiniciar serviço
   11 Verificar eve.json
 """
 
 import os
+import re
 import sys
 import shutil
 import ipaddress
@@ -286,7 +288,6 @@ def _atualizar_regras_et() -> bool:
         total_regras = 0
         for linha in (out + err).split("\n"):
             if "rules added" in linha.lower() or "loaded" in linha.lower():
-                import re
                 nums = re.findall(r'\d+', linha)
                 if nums:
                     total_regras = max(int(n) for n in nums)
@@ -569,6 +570,7 @@ def _confirmar_topologia(topo: dict) -> dict | None:
     linha_texto("  O que vai acontecer a seguir:", C_AVISO)
     linha_texto("    • Regras JG serão copiadas para o sistema", C_DIM)
     linha_texto("    • suricata.yaml receberá os patches necessários", C_DIM)
+    linha_texto("    • Interfaces eth0/placeholder serão removidas do yaml", C_DIM)
     linha_texto("    • A configuração será validada com suricata -T", C_DIM)
     linha_texto("    • O serviço Suricata será reiniciado", C_DIM)
     linha_vazia()
@@ -628,6 +630,9 @@ def _aplicar_todos_patches(yaml_path: Path, topo: dict) -> bool:
     conteudo = _patch_rule_files(conteudo)
     conteudo = _patch_eve_log(conteudo)
     conteudo = _patch_af_packet(conteudo, topo["iface_lan"])
+
+    # ── 8b ─ Sanitizar: remove eth0 e outros placeholders do yaml padrão ─────
+    conteudo = _sanitizar_interfaces_captura(conteudo, topo["iface_lan"])
 
     try:
         yaml_path.write_text(conteudo, encoding="utf-8")
@@ -746,6 +751,9 @@ def _patch_af_packet(conteudo: str, interface: str) -> str:
     BUG CORRIGIDO: a versão anterior ignorava a nova interface se o marcador
     JG já existia no yaml (ex: ao rodar o instalador pela segunda vez com
     interface diferente). Agora sempre atualiza a linha de interface.
+
+    Nota: após este patch, _sanitizar_interfaces_captura() é chamado para
+    remover qualquer eth0/placeholder que ainda reste no yaml padrão.
     """
     MARCADOR = "# == Jarvis Guard: af-packet =="
 
@@ -790,6 +798,57 @@ def _patch_af_packet(conteudo: str, interface: str) -> str:
         return "\n".join(nova)
 
     return conteudo + f"\naf-packet:\n{AF_ENTRY}"
+
+
+def _sanitizar_interfaces_captura(conteudo: str, iface_ok: str) -> str:
+    """
+    Remove eth0 e outros placeholders do suricata.yaml padrão do Debian/Ubuntu.
+
+    Problema: o yaml padrão do Suricata vem com exemplos de interface (geralmente
+    eth0) em af-packet: e pcap:. Mesmo que o _patch_af_packet() insira o bloco JG
+    com a interface correta, os outros blocos sobram e o Suricata tenta criar
+    threads para eth0, o que gera erros "interface not found" no log.
+
+    Solução:
+      1. Substitui a seção af-packet: inteira por um bloco limpo com iface_ok.
+      2. Neutraliza a seção pcap: (coloca interface: none) para não capturar em
+         paralelo em outra interface fantasma.
+      3. Remove linhas soltas "- interface: ethX" que sobram fora dessas seções.
+    """
+    # ── 1) Reescreve seção af-packet: inteira ────────────────────────────────
+    # O yaml padrão pode ter múltiplos itens (eth0, eth1, default...).
+    # Substituímos tudo por um bloco único e limpo.
+    bloco_af = (
+        "af-packet:\n"
+        "  # == Jarvis Guard: af-packet ==\n"
+        f"  - interface: {iface_ok}\n"
+        "    threads: auto\n"
+        "    cluster-id: 99\n"
+        "    cluster-type: cluster_flow\n"
+        "    defrag: yes\n"
+    )
+    conteudo = re.sub(
+        r"(?m)^af-packet:\n(?:^[ \t].*\n)*",
+        bloco_af,
+        conteudo,
+    )
+
+    # ── 2) Neutraliza seção pcap: ─────────────────────────────────────────────
+    # pcap: é o modo de captura alternativo; se sobrar com eth0 lá dentro,
+    # o Suricata pode tentar usá-lo também dependendo do runmode.
+    bloco_pcap = "pcap:\n  - interface: none\n"
+    conteudo = re.sub(
+        r"(?m)^pcap:\n(?:^[ \t].*\n)*",
+        bloco_pcap,
+        conteudo,
+    )
+
+    # ── 3) Remove linhas soltas "- interface: ethX" fora dos blocos JG ───────
+    # Isso captura casos raros onde o yaml tem entradas de interface espalhadas.
+    conteudo = re.sub(r"(?m)^[ \t]*-[ \t]*interface:[ \t]*eth\d+[ \t]*$\n?", "", conteudo)
+
+    print_resultado(True, f"Sanitização OK — apenas '{iface_ok}' em af-packet.")
+    return conteudo
 
 
 # ══════════════════════════════════════════════════════════════════════════════
