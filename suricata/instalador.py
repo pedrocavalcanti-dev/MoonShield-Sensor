@@ -562,9 +562,17 @@ def _copiar_regras_jg() -> bool:
         print_resultado(False, f"Regras não encontradas: {REGRAS_ORIGEM}")
         return False
     try:
+        # Destino 1: /var/lib/suricata/rules/jarvis-guard/
         REGRAS_DEST_DIR.mkdir(parents=True, exist_ok=True)
         shutil.copy2(REGRAS_ORIGEM, REGRAS_DEST)
         print_resultado(True, f"Regras JG copiadas → {REGRAS_DEST}")
+
+        # Destino 2: /etc/suricata/rules/jarvis-guard/  (onde o Suricata realmente lê)
+        etc_dest_dir = Path("/etc/suricata/rules/jarvis-guard")
+        etc_dest_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(REGRAS_ORIGEM, etc_dest_dir / "jg.rules")
+        print_resultado(True, f"Regras JG copiadas → {etc_dest_dir / 'jg.rules'}")
+
         return True
     except Exception as e:
         print_resultado(False, f"Erro ao copiar regras: {e}")
