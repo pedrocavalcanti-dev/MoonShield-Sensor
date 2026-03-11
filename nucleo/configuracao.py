@@ -32,7 +32,7 @@ SEVERIDADE_LABEL = {
 
 def config_padrao() -> dict:
     return {
-        "jarvis_url":    "",
+        "Moon_url":    "",
         "sensor_nome":   socket.gethostname(),
         "min_severity":  "4",
         "batch_size":    20,

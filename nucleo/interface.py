@@ -193,10 +193,10 @@ def boot_sequence(cfg: dict):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _status_conexao(cfg: dict) -> tuple:
-    if not cfg.get("jarvis_url"):
+    if not cfg.get("Moon_url"):
         return "[?] NAO CONFIGURADO", C_AVISO
     try:
-        r = requests.get(cfg["jarvis_url"] + "/", timeout=2)
+        r = requests.get(cfg["Moon_url"] + "/", timeout=2)
         if r.status_code < 500:
             return "[+] ONLINE", C_OK
         return f"[!] HTTP {r.status_code}", C_AVISO
@@ -204,12 +204,12 @@ def _status_conexao(cfg: dict) -> tuple:
         return "[-] OFFLINE", C_ERRO
 
 def _status_conexao_com_spinner(cfg: dict) -> tuple:
-    if not cfg.get("jarvis_url"):
+    if not cfg.get("Moon_url"):
         return "[?] NAO CONFIGURADO", C_AVISO
     try:
         r = spinner_inline(
-            "Verificando conexao com Jarvis...",
-            requests.get, cfg["jarvis_url"] + "/", timeout=2,
+            "Verificando conexao com Moon...",
+            requests.get, cfg["Moon_url"] + "/", timeout=2,
         )
         if r.status_code < 500:
             return "[+] ONLINE", C_OK
@@ -221,9 +221,9 @@ def _status_conexao_com_spinner(cfg: dict) -> tuple:
 # LOGIN
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _fazer_login(jarvis_url: str, usuario: str, senha: str) -> tuple[bool, str]:
+def _fazer_login(Moon_url: str, usuario: str, senha: str) -> tuple[bool, str]:
     session   = requests.Session()
-    login_url = jarvis_url.rstrip("/") + "/auth/login/"
+    login_url = Moon_url.rstrip("/") + "/auth/login/"
     try:
         r    = session.get(login_url, timeout=5)
         csrf = session.cookies.get("csrftoken", "")
@@ -250,9 +250,9 @@ def _fazer_login(jarvis_url: str, usuario: str, senha: str) -> tuple[bool, str]:
     except Exception as e:
         return False, f"Erro ao fazer login: {e}"
 
-def _fazer_login_com_spinner(jarvis_url: str, usuario: str, senha: str) -> tuple[bool, str]:
+def _fazer_login_com_spinner(Moon_url: str, usuario: str, senha: str) -> tuple[bool, str]:
     try:
-        return spinner_inline("Autenticando...", _fazer_login, jarvis_url, usuario, senha)
+        return spinner_inline("Autenticando...", _fazer_login, Moon_url, usuario, senha)
     except Exception as e:
         return False, str(e)
 
@@ -267,15 +267,15 @@ def cabecalho(cfg: dict, verificar_conexao: bool = False):
     else:
         status_str, status_cor = _status_conexao(cfg)
 
-    usuario   = cfg.get("jarvis_usuario") or "---"
-    tem_senha = bool(cfg.get("jarvis_senha"))
+    usuario   = cfg.get("Moon_usuario") or "---"
+    tem_senha = bool(cfg.get("Moon_senha"))
 
     topo()
     linha_texto("MOONSHIELD  .  SENSOR AGENT", C_TITULO, "centro")
     linha_texto(f"v{VERSION}  -  github.com/pedrocavalcanti-dev", C_DIM, "centro")
     separador()
     linha_texto(f"  Status   {status_str}", status_cor)
-    linha_texto(f"  Jarvis   {cfg['jarvis_url'] or '(nao configurado)'}", C_DIM)
+    linha_texto(f"  Moon   {cfg['Moon_url'] or '(nao configurado)'}", C_DIM)
     linha_texto(f"  Sensor   {cfg['sensor_nome']}", C_WHITE)
     linha_texto(f"  Eve.json {cfg['eve_path']}", C_DIM)
     linha_texto(
@@ -315,14 +315,14 @@ def wizard(cfg: dict) -> dict:
         linha_vazia()
         try:
             r = spinner_inline("Testando conexao...", requests.get, url + "/", timeout=4)
-            print_resultado(True, f"Jarvis acessivel  -  HTTP {r.status_code}")
-            cfg["jarvis_url"] = url
+            print_resultado(True, f"Moon acessivel  -  HTTP {r.status_code}")
+            cfg["Moon_url"] = url
             break
         except Exception as e:
             print_resultado(False, f"Nao consegui conectar: {e}")
             nova = input_campo("Tentar outro endereco? (s/n)", "s")
             if nova.lower() != "s":
-                cfg["jarvis_url"] = url
+                cfg["Moon_url"] = url
                 break
 
     linha_vazia()
@@ -336,30 +336,30 @@ def wizard(cfg: dict) -> dict:
 
     tentativas = 0
     while True:
-        usuario = input_campo("Usuario", cfg.get("jarvis_usuario", ""))
+        usuario = input_campo("Usuario", cfg.get("Moon_usuario", ""))
         senha   = input_senha("Senha")
         if not usuario or not senha:
             print_resultado(False, "Usuario e senha sao obrigatorios.")
             continue
         linha_vazia()
-        ok, erro = _fazer_login_com_spinner(cfg["jarvis_url"], usuario, senha)
+        ok, erro = _fazer_login_com_spinner(cfg["Moon_url"], usuario, senha)
         if ok:
             print_resultado(True, f"Login bem-sucedido!  Ola, {usuario}.")
-            cfg["jarvis_usuario"] = usuario
-            cfg["jarvis_senha"]   = senha
+            cfg["Moon_usuario"] = usuario
+            cfg["Moon_senha"]   = senha
             break
         else:
             tentativas += 1
             print_resultado(False, erro)
             if tentativas >= 3:
                 linha_texto("  3 tentativas falhas. Continuando sem login.", C_AVISO)
-                cfg["jarvis_usuario"] = usuario
-                cfg["jarvis_senha"]   = ""
+                cfg["Moon_usuario"] = usuario
+                cfg["Moon_senha"]   = ""
                 break
             tentar = input_campo("Tentar novamente? (s/n)", "s")
             if tentar.lower() != "s":
-                cfg["jarvis_usuario"] = usuario
-                cfg["jarvis_senha"]   = ""
+                cfg["Moon_usuario"] = usuario
+                cfg["Moon_senha"]   = ""
                 break
 
     linha_vazia()
@@ -392,8 +392,8 @@ def wizard(cfg: dict) -> dict:
     separador()
     linha_texto("  CONFIGURACAO CONCLUIDA", C_OK, "centro")
     linha_vazia()
-    linha_texto(f"  Jarvis   : {cfg['jarvis_url']}", C_DIM)
-    linha_texto(f"  Usuario  : {cfg.get('jarvis_usuario', '---')}", C_DIM)
+    linha_texto(f"  Moon   : {cfg['Moon_url']}", C_DIM)
+    linha_texto(f"  Usuario  : {cfg.get('Moon_usuario', '---')}", C_DIM)
     linha_texto(f"  Sensor   : {cfg['sensor_nome']}", C_DIM)
     linha_texto(f"  Severity : {SEVERIDADE_LABEL[cfg['min_severity']]}", C_DIM)
     linha_vazia()
@@ -417,8 +417,8 @@ def menu_principal(cfg: dict):
         cabecalho(cfg, verificar_conexao=_primeira_vez)
         _primeira_vez = False
 
-        usuario_atual = cfg.get("jarvis_usuario") or "(nao configurado)"
-        tem_senha     = bool(cfg.get("jarvis_senha"))
+        usuario_atual = cfg.get("Moon_usuario") or "(nao configurado)"
+        tem_senha     = bool(cfg.get("Moon_senha"))
         cred_label    = f"{usuario_atual}  {'[OK]' if tem_senha else '[!!] sem senha'}"
 
         linha_texto("  --- Operacao -----------------------------------------------", C_NEON_DIM)
@@ -426,14 +426,14 @@ def menu_principal(cfg: dict):
         linha_texto("  [1]  >>  Iniciar sensor", C_WHITE)
         linha_vazia()
         linha_texto("  --- Configuracao -------------------------------------------", C_NEON_DIM)
-        linha_texto("  [2]  --  Configurar URL do Jarvis", C_MENU_TXT)
+        linha_texto("  [2]  --  Configurar URL do Moon", C_MENU_TXT)
         linha_texto("  [3]  --  Configurar nome do sensor", C_MENU_TXT)
         linha_texto("  [4]  --  Configurar severidade minima", C_MENU_TXT)
         linha_texto("  [5]  --  Configurar caminho do eve.json", C_MENU_TXT)
         linha_texto(f"  [8]  --  Credenciais  ({cred_label})", C_MENU_TXT)
         linha_vazia()
         linha_texto("  --- Diagnostico --------------------------------------------", C_NEON_DIM)
-        linha_texto("  [6]  <>  Testar conexao com Jarvis", C_MENU_TXT)
+        linha_texto("  [6]  <>  Testar conexao com Moon", C_MENU_TXT)
         linha_texto("  [7]  <>  Ver configuracao atual", C_MENU_TXT)
         linha_texto("  [9]  <>  Diagnostico do sistema", C_MENU_TXT)
         linha_vazia()
@@ -481,12 +481,12 @@ def tela_config_ip(cfg: dict) -> dict:
     linha_texto("  CONFIGURAR URL DO MOONSHIELD", C_TITULO)
     linha_texto("  Ex: http://192.168.0.105:8000", C_DIM)
     linha_vazia()
-    url = input_campo("Nova URL do MOONSHIELD", cfg["jarvis_url"])
+    url = input_campo("Nova URL do MOONSHIELD", cfg["Moon_url"])
     if url:
         if not url.startswith("http"):
             url = "http://" + url
         url = url.rstrip("/")
-        cfg["jarvis_url"] = url
+        cfg["Moon_url"] = url
         spinner_inline("Salvando...", salvar_config, cfg)
         print_resultado(True, f"URL salva: {url}")
     else:
@@ -547,22 +547,22 @@ def tela_testar_conexao(cfg: dict):
     linha_texto("  TESTAR CONEXAO COM MOONSHIELD", C_TITULO)
     linha_vazia()
 
-    if not cfg["jarvis_url"]:
+    if not cfg["Moon_url"]:
         print_resultado(False, "URL nao configurada.")
         aguardar_enter()
         return
 
-    linha_texto(f"  Alvo: {cfg['jarvis_url']}", C_DIM)
+    linha_texto(f"  Alvo: {cfg['Moon_url']}", C_DIM)
     linha_vazia()
 
     try:
         t0 = time.time()
         r  = spinner_inline("Testando conectividade...", requests.get,
-                            cfg["jarvis_url"] + "/", timeout=5)
+                            cfg["Moon_url"] + "/", timeout=5)
         ms = int((time.time() - t0) * 1000)
         print_resultado(True, f"GET /  ->  HTTP {r.status_code}  ({ms}ms)")
     except requests.exceptions.ConnectionError:
-        print_resultado(False, "Conexao recusada. Jarvis esta rodando?")
+        print_resultado(False, "Conexao recusada. Moon esta rodando?")
         aguardar_enter()
         return
     except Exception as e:
@@ -571,12 +571,12 @@ def tela_testar_conexao(cfg: dict):
         return
 
     linha_vazia()
-    usuario = cfg.get("jarvis_usuario", "")
-    senha   = cfg.get("jarvis_senha", "")
+    usuario = cfg.get("Moon_usuario", "")
+    senha   = cfg.get("Moon_senha", "")
     if not usuario or not senha:
         print_resultado(False, "Credenciais nao configuradas. Use [8] para configurar.")
     else:
-        ok, erro = _fazer_login_com_spinner(cfg["jarvis_url"], usuario, senha)
+        ok, erro = _fazer_login_com_spinner(cfg["Moon_url"], usuario, senha)
         if ok:
             print_resultado(True, f"Login OK  -  usuario: {usuario}")
         else:
@@ -587,7 +587,7 @@ def tela_testar_conexao(cfg: dict):
         payload = {"sensor": cfg["sensor_nome"], "eventos": []}
         def _post():
             return requests.post(
-                cfg["jarvis_url"] + "/incidentes/api/ingest/",
+                cfg["Moon_url"] + "/incidentes/api/ingest/",
                 json=payload, timeout=5,
                 headers={"X-JG-TOKEN": cfg.get("token", "")},
             )
@@ -607,9 +607,9 @@ def tela_ver_config(cfg: dict):
     cabecalho(cfg)
     linha_texto("  CONFIGURACAO ATUAL", C_TITULO)
     linha_vazia()
-    linha_texto(f"  Jarvis URL    : {cfg['jarvis_url'] or '(vazio)'}", C_DIM)
-    linha_texto(f"  Usuario       : {cfg.get('jarvis_usuario') or '(nao configurado)'}", C_DIM)
-    linha_texto(f"  Senha         : {'********' if cfg.get('jarvis_senha') else '(nao configurada)'}", C_DIM)
+    linha_texto(f"  Moon URL    : {cfg['Moon_url'] or '(vazio)'}", C_DIM)
+    linha_texto(f"  Usuario       : {cfg.get('Moon_usuario') or '(nao configurado)'}", C_DIM)
+    linha_texto(f"  Senha         : {'********' if cfg.get('Moon_senha') else '(nao configurada)'}", C_DIM)
     linha_texto(f"  Nome sensor   : {cfg['sensor_nome']}", C_WHITE)
     linha_texto(f"  Eve.json      : {cfg['eve_path']}", C_DIM)
     linha_texto(f"  Severidade    : {SEVERIDADE_LABEL.get(cfg['min_severity'], '?')}", C_DIM)
@@ -634,8 +634,8 @@ def tela_config_credenciais(cfg: dict) -> dict:
     linha_texto("  Credenciais salvas em config.json.", C_DIM)
     linha_vazia()
 
-    usuario_atual = cfg.get("jarvis_usuario", "")
-    tem_senha     = bool(cfg.get("jarvis_senha"))
+    usuario_atual = cfg.get("Moon_usuario", "")
+    tem_senha     = bool(cfg.get("Moon_senha"))
     linha_texto(f"  Usuario atual : {usuario_atual or '(nao configurado)'}", C_WHITE)
     linha_texto(f"  Senha atual   : {'********' if tem_senha else '(nao configurada)'}", C_DIM)
     linha_vazia()
@@ -648,7 +648,7 @@ def tela_config_credenciais(cfg: dict) -> dict:
 
     senha = input_senha("Nova senha (Enter = manter atual)")
     if not senha and tem_senha:
-        senha = cfg["jarvis_senha"]
+        senha = cfg["Moon_senha"]
         linha_texto("  Mantendo senha atual.", C_DIM)
     if not senha:
         print_resultado(False, "Senha obrigatoria.")
@@ -656,10 +656,10 @@ def tela_config_credenciais(cfg: dict) -> dict:
         return cfg
 
     linha_vazia()
-    ok, erro = _fazer_login_com_spinner(cfg["jarvis_url"], usuario, senha)
+    ok, erro = _fazer_login_com_spinner(cfg["Moon_url"], usuario, senha)
     if ok:
-        cfg["jarvis_usuario"] = usuario
-        cfg["jarvis_senha"]   = senha
+        cfg["Moon_usuario"] = usuario
+        cfg["Moon_senha"]   = senha
         spinner_inline("Salvando credenciais...", salvar_config, cfg)
         print_resultado(True, f"Login OK! Credenciais salvas para {usuario}.")
     else:
@@ -668,8 +668,8 @@ def tela_config_credenciais(cfg: dict) -> dict:
         linha_vazia()
         forcar = input_campo("Salvar mesmo assim? (s/n)", "n")
         if forcar.strip().lower() == "s":
-            cfg["jarvis_usuario"] = usuario
-            cfg["jarvis_senha"]   = senha
+            cfg["Moon_usuario"] = usuario
+            cfg["Moon_senha"]   = senha
             spinner_inline("Salvando credenciais...", salvar_config, cfg)
             print_resultado(True, "Credenciais salvas (sem verificacao).")
 
