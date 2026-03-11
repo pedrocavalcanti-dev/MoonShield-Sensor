@@ -13,7 +13,7 @@ Fluxo:
        → Pergunta se quer adicionar outras redes ao HOME_NET
        → Todas as interfaces UP são monitoradas no af-packet
   5  Confirmar com resumo completo
-  6  Copiar regras JG
+  6  Copiar regras MS
   7  Backup do suricata.yaml
   8  Aplicar patches (HOME_NET multi-rede, rule-files, eve-log, af-packet)
   9  Validar com suricata -T → restaurar backup se falhar
@@ -206,7 +206,7 @@ def _atualizar_regras_et() -> bool:
     linha_texto("REGRAS EMERGING THREATS (ET Open)", C_DESTAQUE)
     linha_vazia()
     linha_texto("  As regras ET Open cobrem ~40.000 ameaças conhecidas.", C_DIM)
-    linha_texto("  As regras JG serão adicionadas por cima.", C_DIM)
+    linha_texto("  As regras MS serão adicionadas por cima.", C_DIM)
     linha_vazia()
 
     if not cmd_existe("suricata-update"):
@@ -225,7 +225,7 @@ def _atualizar_regras_et() -> bool:
 
     if not cmd_existe("suricata-update"):
         print_resultado(False, "suricata-update não disponível.")
-        linha_texto("  Continuando apenas com regras JG.", C_AVISO)
+        linha_texto("  Continuando apenas com regras MS.", C_AVISO)
         linha_vazia()
         return False
 
@@ -254,7 +254,7 @@ def _atualizar_regras_et() -> bool:
     else:
         saida = (out + err)[:200]
         print_resultado(False, f"suricata-update falhou: {saida}")
-        linha_texto("  Continuando apenas com regras JG.", C_AVISO)
+        linha_texto("  Continuando apenas com regras MS.", C_AVISO)
         linha_vazia()
         return False
 
@@ -408,7 +408,7 @@ def _escolher_interface() -> dict | None:
         linha_texto(f"    • {nome}  {info.get('cidr','')}{tag}", C_DIM)
     linha_vazia()
     linha_texto("  O que vai acontecer:", C_AVISO)
-    linha_texto("    • Regras JG copiadas para o sistema", C_DIM)
+    linha_texto("    • Regras MS copiadas para o sistema", C_DIM)
     linha_texto("    • suricata.yaml reescrito com TODAS as interfaces", C_DIM)
     linha_texto("    • HOME_NET configurado com todas as redes selecionadas", C_DIM)
     linha_texto("    • eth0 e placeholders removidos", C_DIM)
@@ -554,7 +554,7 @@ def _listar_interfaces_com_ip() -> list:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 6 — REGRAS JG
+# 6 — REGRAS MS
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _copiar_regras_ms() -> bool:
@@ -565,13 +565,13 @@ def _copiar_regras_ms() -> bool:
         # Destino 1: /var/lib/suricata/rules/moonshield/
         REGRAS_DEST_DIR.mkdir(parents=True, exist_ok=True)
         shutil.copy2(REGRAS_ORIGEM, REGRAS_DEST)
-        print_resultado(True, f"Regras JG copiadas → {REGRAS_DEST}")
+        print_resultado(True, f"Regras MS copiadas → {REGRAS_DEST}")
 
         # Destino 2: /etc/suricata/rules/moonshield/  (onde o Suricata realmente lê)
         etc_dest_dir = Path("/etc/suricata/rules/moonshield")
         etc_dest_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(REGRAS_ORIGEM, etc_dest_dir / "ms.rules")
-        print_resultado(True, f"Regras JG copiadas → {etc_dest_dir / 'ms.rules'}")
+        print_resultado(True, f"Regras MS copiadas → {etc_dest_dir / 'ms.rules'}")
 
         return True
     except Exception as e:
@@ -584,7 +584,7 @@ def _copiar_regras_ms() -> bool:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _backup_arquivo(path: Path) -> Path | None:
-    bak = Path(str(path) + ".jg.bak")
+    bak = Path(str(path) + ".ms.bak")
     try:
         shutil.copy2(path, bak)
         return bak

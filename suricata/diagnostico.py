@@ -55,7 +55,7 @@ def executar_diagnostico(cfg: dict) -> dict:
     resultados.append(_check_suricata_t(yaml_path))
     resultados.append(_check_home_net(yaml_path, cfg))
     resultados.append(_check_regras_ms())
-    resultados.append(_check_yaml_referencia_jg(yaml_path))
+    resultados.append(_check_yaml_referencia_ms(yaml_path))
 
     # ── Serviço ───────────────────────────────────────────────────────────────
     resultados.append(_check_servico())
@@ -215,26 +215,26 @@ def _check_home_net(yaml_path: Path | None, cfg: dict) -> dict:
 def _check_regras_ms() -> dict:
     if REGRAS_DEST.exists():
         tam = REGRAS_DEST.stat().st_size
-        return _item("regras_ms", True, "Regras JG instaladas", f"{REGRAS_DEST} ({tam:,} bytes)")
+        return _item("regras_ms", True, "Regras MS instaladas", f"{REGRAS_DEST} ({tam:,} bytes)")
     return _item(
-        "regras_ms", False, "Regras JG instaladas",
+        "regras_ms", False, "Regras MS instaladas",
         f"não encontrado: {REGRAS_DEST}",
         "Use [0] Instalar/Configurar Suricata para copiar as regras",
     )
 
 
-def _check_yaml_referencia_jg(yaml_path: Path | None) -> dict:
+def _check_yaml_referencia_ms(yaml_path: Path | None) -> dict:
     if yaml_path is None:
-        return _item("yaml_ref_jg", False, "suricata.yaml referencia ms.rules", "yaml ausente — pulado")
+        return _item("yaml_ref_ms", False, "suricata.yaml referencia ms.rules", "yaml ausente — pulado")
     try:
         conteudo = yaml_path.read_text(encoding="utf-8", errors="ignore")
     except Exception as e:
-        return _item("yaml_ref_jg", False, "suricata.yaml referencia ms.rules", str(e))
+        return _item("yaml_ref_ms", False, "suricata.yaml referencia ms.rules", str(e))
 
     if "moonshield/ms.rules" in conteudo:
-        return _item("yaml_ref_jg", True, "suricata.yaml referencia ms.rules", "entrada encontrada")
+        return _item("yaml_ref_ms", True, "suricata.yaml referencia ms.rules", "entrada encontrada")
     return _item(
-        "yaml_ref_jg", False, "suricata.yaml referencia ms.rules",
+        "yaml_ref_ms", False, "suricata.yaml referencia ms.rules",
         "entrada ausente em rule-files",
         "Use [0] Instalar/Configurar Suricata para aplicar o patch",
     )
@@ -383,7 +383,7 @@ def _exibir_resultados(resultados: list):
     grupos = {
         "Sistema":       ["linux", "root"],
         "Suricata":      ["suricata_bin", "yaml", "suricata_t"],
-        "Configuração":  ["home_net", "regras_ms", "yaml_ref_jg"],
+        "Configuração":  ["home_net", "regras_ms", "yaml_ref_ms"],
         "Serviço":       ["servico", "iface_captura"],
         "Logs":          ["eve_existe", "eve_atualiza", "eve_perm"],
         "Topologia":     ["dns_interno", "bypass_dns"],
