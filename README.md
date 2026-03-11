@@ -1,4 +1,4 @@
-# Jarvis Guard Sensor
+﻿# MOONSHIELD Sensor
 
 ```
      ██╗ ██████╗      ███████╗███████╗███╗   ██╗███████╗ ██████╗ ██████╗
@@ -9,7 +9,7 @@
  ╚════╝  ╚═════╝      ╚══════╝╚══════╝╚═╝  ╚═══╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝
 ```
 
-**Sensor Agent v2.0 — Jarvis Guard**
+**Sensor Agent v2.0 — MOONSHIELD**
 
 > Instala e configura o Suricata, monitora o `eve.json` e envia eventos em tempo real para o painel SOC.
 
@@ -17,19 +17,19 @@
 
 ## O que é isso?
 
-O **Jarvis Guard Sensor** é o agente que roda na máquina Linux com Suricata (geralmente o gateway da rede).
+O **MOONSHIELD Sensor** é o agente que roda na máquina Linux com Suricata (geralmente o gateway da rede).
 
 Na **v2.0** ele ganhou:
 - Instalador completo do Suricata com detecção automática de topologia de rede
-- Regras próprias (**Jarvis Guard Ruleset**)
+- Regras próprias (**MOONSHIELD Ruleset**)
 - Autenticação por usuário/senha com sessão persistente
 - Diagnóstico integrado com **15 checks automáticos**
 
 ```
-Linux Gateway (Suricata)                     Servidor Jarvis Guard
+Linux Gateway (Suricata)                     Servidor MOONSHIELD
 ────────────────────────                     ──────────────────────
 Suricata → /var/log/suricata/eve.json
-    └── jg_sensor.py  ─────── POST ──────────▶  /incidentes/api/ingest/
+    └── ms_sensor.py  ─────── POST ──────────▶  /incidentes/api/ingest/
                                                    └── Dashboard SOC
 ```
 
@@ -43,7 +43,7 @@ Suricata → /var/log/suricata/eve.json
 | ⚙️ | **Gerenciamento de credenciais no menu** — opção `[8]` permite ver, atualizar e testar usuário/senha sem rodar o wizard novamente |
 | 🛠️ | **Instalador automático do Suricata** — detecta WAN/LAN, redes (`HOME_NET`), DNS interno e aplica patches no `suricata.yaml` automaticamente |
 | 📋 | **Regras Emerging Threats (ET Open)** — ~40.000 assinaturas (malware, C2, exploits, botnets) via `suricata-update` |
-| 🛡️ | **Jarvis Guard Ruleset v1** — 50 regras customizadas (SIDs `9900001–9900050`) em 7 grupos |
+| 🛡️ | **MOONSHIELD Ruleset v1** — 50 regras customizadas (SIDs `9900001–9900050`) em 7 grupos |
 | 🩺 | **Diagnóstico integrado** — 15 checks automáticos para toda a stack |
 | 🧩 | **Estrutura modular** — separado em `nucleo/` e `suricata/` para fácil manutenção |
 | 💾 | **Topologia salva no config.json** — interface, WAN, HOME_NET e DNS persistem entre sessões |
@@ -53,9 +53,9 @@ Suricata → /var/log/suricata/eve.json
 ## 📁 Estrutura do repositório
 
 ```
-Jarvis-Guard-Sensor/
+moonshield-Sensor/
 │
-├── jg_sensor.py                   ← Entry point principal
+├── ms_sensor.py                   ← Entry point principal
 ├── config.json                    ← Gerado automaticamente (não sobe no git)
 ├── requirements.txt
 ├── .gitignore
@@ -72,7 +72,7 @@ Jarvis-Guard-Sensor/
     ├── __init__.py
     ├── instalador.py              ← Instalação + detecção de topologia + patches yaml
     ├── diagnostico.py             ← Doctor: 15 checks automáticos
-    └── regras_jg.rules            ← Jarvis Guard Ruleset v1 (50 regras)
+    └── regras_ms.rules            ← MOONSHIELD Ruleset v1 (50 regras)
 ```
 
 ---
@@ -91,18 +91,18 @@ O sensor precisa de privilégios de root para instalar o Suricata e ler o `eve.j
 
 ```bash
 # ✅ Recomendado — chama o python do venv diretamente com sudo
-sudo venv/bin/python3 jg_sensor.py
+sudo venv/bin/python3 ms_sensor.py
 
 # ✅ Alternativa — entrar como root e ativar o venv no shell root
 sudo su
 source venv/bin/activate
-python3 jg_sensor.py
+python3 ms_sensor.py
 
 # ❌ Pode falhar — sudo não enxerga o venv ativado pelo usuário comum
-sudo python3 jg_sensor.py
+sudo python3 ms_sensor.py
 ```
 
-> Se você já está logado como root diretamente (sem sudo), ative o venv normalmente e execute `python3 jg_sensor.py` sem prefixo.
+> Se você já está logado como root diretamente (sem sudo), ative o venv normalmente e execute `python3 ms_sensor.py` sem prefixo.
 
 ---
 
@@ -124,8 +124,8 @@ sudo pacman -S git
 ### Passo 2 — Clone o repositório
 
 ```bash
-git clone https://github.com/pedrocavalcanti-dev/Jarvis-Guard-Sensor.git
-cd Jarvis-Guard-Sensor
+git clone https://github.com/pedrocavalcanti-dev/moonshield-Sensor.git
+cd moonshield-Sensor
 ```
 
 ### Passo 3 — Ambiente virtual e dependências
@@ -140,10 +140,10 @@ pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org -r req
 ### Passo 4 — Execute
 
 ```bash
-sudo venv/bin/python3 jg_sensor.py
+sudo venv/bin/python3 ms_sensor.py
 ```
 
-> **Primeira execução:** o wizard abre automaticamente. Informe a URL do Jarvis Guard, faça login com usuário/senha, defina o nome do sensor e a severidade mínima. Tudo é salvo em `config.json` — próximas execuções vão direto pro menu.
+> **Primeira execução:** o wizard abre automaticamente. Informe a URL do MOONSHIELD, faça login com usuário/senha, defina o nome do sensor e a severidade mínima. Tudo é salvo em `config.json` — próximas execuções vão direto pro menu.
 
 ---
 
@@ -151,12 +151,12 @@ sudo venv/bin/python3 jg_sensor.py
 
 ```bash
 sudo apt install git python3 python3-pip python3-venv -y
-git clone https://github.com/pedrocavalcanti-dev/Jarvis-Guard-Sensor.git
-cd Jarvis-Guard-Sensor
+git clone https://github.com/pedrocavalcanti-dev/moonshield-Sensor.git
+cd moonshield-Sensor
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-sudo venv/bin/python3 jg_sensor.py
+sudo venv/bin/python3 ms_sensor.py
 ```
 
 ---
@@ -165,7 +165,7 @@ sudo venv/bin/python3 jg_sensor.py
 
 ```
 ╔══════════════════════════════════════════════════════╗
-║              JARVIS GUARD — SENSOR v2.0              ║
+║              MOONSHIELD — SENSOR v2.0              ║
 ╠══════════════════════════════════════════════════════╣
 ║  Status  : ● JARVIS ACESSÍVEL                        ║
 ║  Jarvis  : http://192.168.0.105:8000                 ║
@@ -190,10 +190,10 @@ sudo venv/bin/python3 jg_sensor.py
 
 ## 🔐 Autenticação — wizard e opção [8]
 
-O sensor autentica no Jarvis Guard usando sessão HTTP com cookies (mesmo mecanismo do painel web Django). Isso garante que eventos só sejam aceitos por sensores autorizados.
+O sensor autentica no MOONSHIELD usando sessão HTTP com cookies (mesmo mecanismo do painel web Django). Isso garante que eventos só sejam aceitos por sensores autorizados.
 
 **No wizard (primeira execução):**
-- Passo 2 pede usuário e senha do Jarvis Guard
+- Passo 2 pede usuário e senha do MOONSHIELD
 - Testa o login em tempo real antes de salvar
 - Até 3 tentativas antes de continuar sem autenticação
 
@@ -227,11 +227,11 @@ Ao entrar em **[0] Instalar / Configurar Suricata**, o instalador executa automa
    - Passo 2: confirmar interface LAN (captura do Suricata)
    - Passo 3: confirmar HOME_NET (CIDRs, separados por vírgula)
    - Passo 4: confirmar DNS interno / AdGuard
-7. Copia as regras JG para `/var/lib/suricata/rules/jarvis-guard/jg.rules`
+7. Copia as regras JG para `/var/lib/suricata/rules/moonshield/ms.rules`
 8. Faz backup do `suricata.yaml` → `suricata.yaml.jg.bak`
 9. **Aplica 4 patches no `suricata.yaml`:**
    - `HOME_NET` com os CIDRs informados
-   - `rule-files` com a entrada `jarvis-guard/jg.rules`
+   - `rule-files` com a entrada `moonshield/ms.rules`
    - `eve-log` habilitado com `alert`, `dns`, `http`, `tls` em `/var/log/suricata/eve.json`
    - `af-packet` com a interface LAN de captura
 10. Valida com `suricata -T` — restaura o backup automaticamente se falhar
@@ -253,9 +253,9 @@ Ao entrar em **[0] Instalar / Configurar Suricata**, o instalador executa automa
 
 ---
 
-## 🛡️ Jarvis Guard Ruleset v1 — 50 regras customizadas
+## 🛡️ MOONSHIELD Ruleset v1 — 50 regras customizadas
 
-Instaladas em `/var/lib/suricata/rules/jarvis-guard/jg.rules`.  
+Instaladas em `/var/lib/suricata/rules/moonshield/ms.rules`.  
 **SID range reservado:** `9900001 – 9900050`
 
 | Grupo | SIDs | O que cobre |
@@ -280,7 +280,7 @@ Executa **15 checks automáticos** organizados por grupo:
 |-------|--------|
 | **Sistema** | Linux, root |
 | **Suricata** | Binário instalado (exibe versão), `suricata.yaml` encontrado, `suricata -T` válido |
-| **Configuração** | HOME_NET correto no yaml, regras JG instaladas, yaml referencia `jg.rules` |
+| **Configuração** | HOME_NET correto no yaml, regras JG instaladas, yaml referencia `ms.rules` |
 | **Serviço** | `systemctl is-active suricata`, interface de captura existe e está up |
 | **Logs** | `eve.json` existe (tamanho), `eve.json` crescendo em 4s, permissão de leitura |
 | **Topologia** | DNS interno configurado, regra de bypass DNS ativa |
@@ -291,7 +291,7 @@ Ao final exibe: ações recomendadas para cada falha, resumo da topologia salva 
 
 ## 🎚️ Severidade mínima — opção [4]
 
-O sensor filtra eventos antes de enviar ao Jarvis Guard:
+O sensor filtra eventos antes de enviar ao MOONSHIELD:
 
 | Opção | Envia |
 |-------|-------|
@@ -312,14 +312,14 @@ sudo nano /etc/systemd/system/jg-sensor.service
 
 ```ini
 [Unit]
-Description=Jarvis Guard Sensor Agent v2
+Description=MOONSHIELD Sensor Agent v2
 After=network.target suricata.service
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/opt/Jarvis-Guard-Sensor
-ExecStart=/opt/Jarvis-Guard-Sensor/venv/bin/python jg_sensor.py --auto
+WorkingDirectory=/opt/moonshield-Sensor
+ExecStart=/opt/moonshield-Sensor/venv/bin/python ms_sensor.py --auto
 Restart=on-failure
 RestartSec=10
 
@@ -334,14 +334,14 @@ sudo systemctl start jg-sensor
 sudo systemctl status jg-sensor
 ```
 
-> O flag `--auto` pula o menu e inicia o sensor direto. Um heartbeat é enviado ao Jarvis Guard a cada 30s para manter o status online no painel. No modo `--auto` o login é feito automaticamente usando as credenciais salvas no `config.json`.
+> O flag `--auto` pula o menu e inicia o sensor direto. Um heartbeat é enviado ao MOONSHIELD a cada 30s para manter o status online no painel. No modo `--auto` o login é feito automaticamente usando as credenciais salvas no `config.json`.
 
 ---
 
 ## 🌐 Requisitos de rede
 
-- O sensor precisa alcançar o Jarvis Guard via HTTP (porta padrão `8000`)
-- O Jarvis Guard deve estar rodando com `python gerenciar.py runserver 0.0.0.0:8000`
+- O sensor precisa alcançar o MOONSHIELD via HTTP (porta padrão `8000`)
+- O MOONSHIELD deve estar rodando com `python gerenciar.py runserver 0.0.0.0:8000`
 - O `eve.json` precisa ter permissão de leitura:
 
 ```bash
@@ -356,12 +356,12 @@ sudo chmod 644 /var/log/suricata/eve.json
 <summary><strong>sudo python3 não encontra o python do venv</strong></summary>
 
 ```bash
-sudo venv/bin/python3 jg_sensor.py
+sudo venv/bin/python3 ms_sensor.py
 
 # Ou entre como root e ative o venv:
 sudo su
 source venv/bin/activate
-python3 jg_sensor.py
+python3 ms_sensor.py
 ```
 </details>
 
@@ -376,7 +376,7 @@ grep -A5 eve-log /etc/suricata/suricata.yaml
 </details>
 
 <details>
-<summary><strong>Jarvis Guard não acessível</strong></summary>
+<summary><strong>MOONSHIELD não acessível</strong></summary>
 
 ```bash
 python gerenciar.py runserver 0.0.0.0:8000
@@ -445,10 +445,10 @@ sudo systemctl restart suricata
 
 ## 🔗 Relacionado
 
-- [Jarvis Guard — Dashboard SOC principal](https://github.com/pedrocavalcanti-dev/Jarvis-Guard)
+- [MOONSHIELD — Dashboard SOC principal](https://github.com/pedrocavalcanti-dev/moonshield)
 
 ---
 
 <div align="center">
-  Parte do ecossistema <strong>Jarvis Guard</strong> &nbsp;•&nbsp; v2.0
+  Parte do ecossistema <strong>MOONSHIELD</strong> &nbsp;•&nbsp; v2.0
 </div>

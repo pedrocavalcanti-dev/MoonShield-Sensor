@@ -1,8 +1,8 @@
-# =============================================================================
-# Jarvis Guard — Ruleset v2.0
-# Arquivo destino: /var/lib/suricata/rules/jarvis-guard/jg.rules
+﻿# =============================================================================
+# MOONSHIELD — Ruleset v2.0
+# Arquivo destino: /var/lib/suricata/rules/moonshield/ms.rules
 #
-# SID range reservado Jarvis Guard: 9900001 – 9900120
+# SID range reservado MOONSHIELD: 9900001 – 9900120
 #
 # v2.0 — Cobertura completa:
 #   - $HOME_NET → $HOME_NET     (movimento lateral / interno)
@@ -21,14 +21,14 @@
 # Cobre: $HOME_NET → $HOME_NET
 # ═════════════════════════════════════════════════════════════════════════════
 
-alert tcp $HOME_NET any -> $HOME_NET any (msg:"JG RECON: Possivel port scan SYN interno (muitas portas)"; flow:to_server; flags:S; detection_filter:track by_src, count 40, seconds 10; classtype:attempted-recon; priority:2; metadata: jarvis_guard yes, stage recon, direction internal; sid:9900001; rev:2;)
-alert icmp $HOME_NET any -> $HOME_NET any (msg:"JG RECON: Possivel ping sweep ICMP na rede interna"; itype:8; detection_filter:track by_src, count 30, seconds 10; classtype:attempted-recon; priority:3; metadata: jarvis_guard yes, stage recon, direction internal; sid:9900002; rev:2;)
-alert tcp $HOME_NET any -> $HOME_NET any (msg:"JG RECON: Possivel host sweep TCP interno (muitos destinos)"; flow:to_server; detection_filter:track by_src, count 120, seconds 30; classtype:attempted-recon; priority:3; metadata: jarvis_guard yes, stage recon, direction internal; sid:9900003; rev:2;)
-alert udp $HOME_NET any -> $HOME_NET 161 (msg:"JG RECON: Varredura SNMP (UDP/161) na rede interna"; detection_filter:track by_src, count 12, seconds 10; classtype:attempted-recon; priority:2; metadata: jarvis_guard yes, stage recon, direction internal; sid:9900004; rev:2;)
-alert tcp $HOME_NET any -> $HOME_NET [80,443,8080,8443,9000,9090] (msg:"JG RECON: Varredura de paineis web admin na rede interna"; flow:to_server; flags:S; detection_filter:track by_src, count 30, seconds 20; classtype:web-application-attack; priority:2; metadata: jarvis_guard yes, stage recon, direction internal; sid:9900005; rev:2;)
-alert udp $HOME_NET any -> $HOME_NET any (msg:"JG RECON: Scan UDP para muitas portas internas"; detection_filter:track by_src, count 60, seconds 20; classtype:attempted-recon; priority:3; metadata: jarvis_guard yes, stage recon, direction internal; sid:9900006; rev:2;)
+alert tcp $HOME_NET any -> $HOME_NET any (msg:"JG RECON: Possivel port scan SYN interno (muitas portas)"; flow:to_server; flags:S; detection_filter:track by_src, count 40, seconds 10; classtype:attempted-recon; priority:2; metadata: moonshield yes, stage recon, direction internal; sid:9900001; rev:2;)
+alert icmp $HOME_NET any -> $HOME_NET any (msg:"JG RECON: Possivel ping sweep ICMP na rede interna"; itype:8; detection_filter:track by_src, count 30, seconds 10; classtype:attempted-recon; priority:3; metadata: moonshield yes, stage recon, direction internal; sid:9900002; rev:2;)
+alert tcp $HOME_NET any -> $HOME_NET any (msg:"JG RECON: Possivel host sweep TCP interno (muitos destinos)"; flow:to_server; detection_filter:track by_src, count 120, seconds 30; classtype:attempted-recon; priority:3; metadata: moonshield yes, stage recon, direction internal; sid:9900003; rev:2;)
+alert udp $HOME_NET any -> $HOME_NET 161 (msg:"JG RECON: Varredura SNMP (UDP/161) na rede interna"; detection_filter:track by_src, count 12, seconds 10; classtype:attempted-recon; priority:2; metadata: moonshield yes, stage recon, direction internal; sid:9900004; rev:2;)
+alert tcp $HOME_NET any -> $HOME_NET [80,443,8080,8443,9000,9090] (msg:"JG RECON: Varredura de paineis web admin na rede interna"; flow:to_server; flags:S; detection_filter:track by_src, count 30, seconds 20; classtype:web-application-attack; priority:2; metadata: moonshield yes, stage recon, direction internal; sid:9900005; rev:2;)
+alert udp $HOME_NET any -> $HOME_NET any (msg:"JG RECON: Scan UDP para muitas portas internas"; detection_filter:track by_src, count 60, seconds 20; classtype:attempted-recon; priority:3; metadata: moonshield yes, stage recon, direction internal; sid:9900006; rev:2;)
 # 9900007 reservado (ARP — monitoramento.py)
-alert tcp $HOME_NET any -> $HOME_NET [31337,4444,1337,12345,54321] (msg:"JG RECON: Conexao para porta alta suspeita na LAN (fingerprinting)"; flow:to_server; flags:S; classtype:attempted-recon; priority:2; metadata: jarvis_guard yes, stage recon, direction internal; sid:9900008; rev:2;)
+alert tcp $HOME_NET any -> $HOME_NET [31337,4444,1337,12345,54321] (msg:"JG RECON: Conexao para porta alta suspeita na LAN (fingerprinting)"; flow:to_server; flags:S; classtype:attempted-recon; priority:2; metadata: moonshield yes, stage recon, direction internal; sid:9900008; rev:2;)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -36,14 +36,14 @@ alert tcp $HOME_NET any -> $HOME_NET [31337,4444,1337,12345,54321] (msg:"JG RECO
 # Cobre: $EXTERNAL_NET → $HOME_NET  (ataques vindos de fora)
 # ═════════════════════════════════════════════════════════════════════════════
 
-alert tcp $EXTERNAL_NET any -> $HOME_NET any (msg:"JG RECON EXT: Port scan SYN de origem externa"; flow:to_server; flags:S; detection_filter:track by_src, count 40, seconds 10; classtype:attempted-recon; priority:1; metadata: jarvis_guard yes, stage recon, direction inbound; sid:9900061; rev:1;)
-alert icmp $EXTERNAL_NET any -> $HOME_NET any (msg:"JG RECON EXT: Ping sweep ICMP de origem externa"; itype:8; detection_filter:track by_src, count 20, seconds 10; classtype:attempted-recon; priority:2; metadata: jarvis_guard yes, stage recon, direction inbound; sid:9900062; rev:1;)
-alert tcp $EXTERNAL_NET any -> $HOME_NET any (msg:"JG RECON EXT: Host sweep TCP de origem externa"; flow:to_server; detection_filter:track by_src, count 80, seconds 30; classtype:attempted-recon; priority:2; metadata: jarvis_guard yes, stage recon, direction inbound; sid:9900063; rev:1;)
-alert udp $EXTERNAL_NET any -> $HOME_NET 161 (msg:"JG RECON EXT: Varredura SNMP de origem externa"; detection_filter:track by_src, count 8, seconds 10; classtype:attempted-recon; priority:1; metadata: jarvis_guard yes, stage recon, direction inbound; sid:9900064; rev:1;)
-alert tcp $EXTERNAL_NET any -> $HOME_NET [80,443,8080,8443,9000,9090] (msg:"JG RECON EXT: Varredura de paineis web admin de origem externa"; flow:to_server; flags:S; detection_filter:track by_src, count 20, seconds 20; classtype:web-application-attack; priority:1; metadata: jarvis_guard yes, stage recon, direction inbound; sid:9900065; rev:1;)
-alert tcp $EXTERNAL_NET any -> $HOME_NET [31337,4444,1337,12345,54321] (msg:"JG RECON EXT: Conexao para porta suspeita de origem externa"; flow:to_server; flags:S; classtype:attempted-recon; priority:1; metadata: jarvis_guard yes, stage recon, direction inbound; sid:9900066; rev:1;)
-alert tcp $EXTERNAL_NET any -> $HOME_NET any (msg:"JG RECON EXT: Nmap NULL scan de origem externa (sem flags TCP)"; flags:0; classtype:attempted-recon; priority:1; metadata: jarvis_guard yes, stage recon, tag nmap, direction inbound; sid:9900067; rev:1;)
-alert tcp $EXTERNAL_NET any -> $HOME_NET any (msg:"JG RECON EXT: Nmap XMAS scan de origem externa (FIN+PSH+URG)"; flags:FPU; classtype:attempted-recon; priority:1; metadata: jarvis_guard yes, stage recon, tag nmap, direction inbound; sid:9900068; rev:1;)
+alert tcp $EXTERNAL_NET any -> $HOME_NET any (msg:"JG RECON EXT: Port scan SYN de origem externa"; flow:to_server; flags:S; detection_filter:track by_src, count 40, seconds 10; classtype:attempted-recon; priority:1; metadata: moonshield yes, stage recon, direction inbound; sid:9900061; rev:1;)
+alert icmp $EXTERNAL_NET any -> $HOME_NET any (msg:"JG RECON EXT: Ping sweep ICMP de origem externa"; itype:8; detection_filter:track by_src, count 20, seconds 10; classtype:attempted-recon; priority:2; metadata: moonshield yes, stage recon, direction inbound; sid:9900062; rev:1;)
+alert tcp $EXTERNAL_NET any -> $HOME_NET any (msg:"JG RECON EXT: Host sweep TCP de origem externa"; flow:to_server; detection_filter:track by_src, count 80, seconds 30; classtype:attempted-recon; priority:2; metadata: moonshield yes, stage recon, direction inbound; sid:9900063; rev:1;)
+alert udp $EXTERNAL_NET any -> $HOME_NET 161 (msg:"JG RECON EXT: Varredura SNMP de origem externa"; detection_filter:track by_src, count 8, seconds 10; classtype:attempted-recon; priority:1; metadata: moonshield yes, stage recon, direction inbound; sid:9900064; rev:1;)
+alert tcp $EXTERNAL_NET any -> $HOME_NET [80,443,8080,8443,9000,9090] (msg:"JG RECON EXT: Varredura de paineis web admin de origem externa"; flow:to_server; flags:S; detection_filter:track by_src, count 20, seconds 20; classtype:web-application-attack; priority:1; metadata: moonshield yes, stage recon, direction inbound; sid:9900065; rev:1;)
+alert tcp $EXTERNAL_NET any -> $HOME_NET [31337,4444,1337,12345,54321] (msg:"JG RECON EXT: Conexao para porta suspeita de origem externa"; flow:to_server; flags:S; classtype:attempted-recon; priority:1; metadata: moonshield yes, stage recon, direction inbound; sid:9900066; rev:1;)
+alert tcp $EXTERNAL_NET any -> $HOME_NET any (msg:"JG RECON EXT: Nmap NULL scan de origem externa (sem flags TCP)"; flags:0; classtype:attempted-recon; priority:1; metadata: moonshield yes, stage recon, tag nmap, direction inbound; sid:9900067; rev:1;)
+alert tcp $EXTERNAL_NET any -> $HOME_NET any (msg:"JG RECON EXT: Nmap XMAS scan de origem externa (FIN+PSH+URG)"; flags:FPU; classtype:attempted-recon; priority:1; metadata: moonshield yes, stage recon, tag nmap, direction inbound; sid:9900068; rev:1;)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -51,14 +51,14 @@ alert tcp $EXTERNAL_NET any -> $HOME_NET any (msg:"JG RECON EXT: Nmap XMAS scan 
 # Cobre: $HOME_NET → $HOME_NET
 # ═════════════════════════════════════════════════════════════════════════════
 
-alert tcp $HOME_NET any -> $HOME_NET 22   (msg:"JG AUTH: Possivel brute force SSH interno"; flow:to_server; flags:S; detection_filter:track by_src, count 20, seconds 30; classtype:attempted-admin; priority:1; metadata: jarvis_guard yes, stage auth, direction internal; sid:9900009; rev:2;)
-alert tcp $HOME_NET any -> $HOME_NET 3389 (msg:"JG AUTH: Possivel brute force RDP interno"; flow:to_server; flags:S; detection_filter:track by_src, count 25, seconds 60; classtype:attempted-admin; priority:1; metadata: jarvis_guard yes, stage auth, direction internal; sid:9900010; rev:2;)
-alert tcp $HOME_NET any -> $HOME_NET 21   (msg:"JG AUTH: Possivel brute force FTP interno"; flow:to_server; flags:S; detection_filter:track by_src, count 20, seconds 60; classtype:attempted-admin; priority:2; metadata: jarvis_guard yes, stage auth, direction internal; sid:9900011; rev:2;)
-alert tcp $HOME_NET any -> $HOME_NET 445  (msg:"JG AUTH/LATERAL: Muitas conexoes SMB internas"; flow:to_server; flags:S; detection_filter:track by_src, count 40, seconds 30; classtype:attempted-admin; priority:2; metadata: jarvis_guard yes, stage auth, stage lateral, direction internal; sid:9900012; rev:2;)
-alert tcp $HOME_NET any -> $HOME_NET 5985 (msg:"JG AUTH: Possivel brute force WinRM HTTP interno (5985)"; flow:to_server; flags:S; detection_filter:track by_src, count 20, seconds 60; classtype:attempted-admin; priority:2; metadata: jarvis_guard yes, stage auth, direction internal; sid:9900013; rev:2;)
-alert tcp $HOME_NET any -> $HOME_NET 5986 (msg:"JG AUTH: Possivel brute force WinRM HTTPS interno (5986)"; flow:to_server; flags:S; detection_filter:track by_src, count 20, seconds 60; classtype:attempted-admin; priority:2; metadata: jarvis_guard yes, stage auth, direction internal; sid:9900014; rev:2;)
-alert tcp $HOME_NET any -> $HOME_NET 23   (msg:"JG AUTH: Possivel brute force Telnet interno"; flow:to_server; flags:S; detection_filter:track by_src, count 15, seconds 30; classtype:attempted-admin; priority:2; metadata: jarvis_guard yes, stage auth, direction internal; sid:9900015; rev:2;)
-alert tcp $HOME_NET any -> $HOME_NET [80,443,8080,8443] (msg:"JG AUTH: Muitas tentativas em servico web interno"; flow:to_server; detection_filter:track by_src, count 60, seconds 30; classtype:web-application-attack; priority:2; metadata: jarvis_guard yes, stage auth, direction internal; sid:9900016; rev:2;)
+alert tcp $HOME_NET any -> $HOME_NET 22   (msg:"JG AUTH: Possivel brute force SSH interno"; flow:to_server; flags:S; detection_filter:track by_src, count 20, seconds 30; classtype:attempted-admin; priority:1; metadata: moonshield yes, stage auth, direction internal; sid:9900009; rev:2;)
+alert tcp $HOME_NET any -> $HOME_NET 3389 (msg:"JG AUTH: Possivel brute force RDP interno"; flow:to_server; flags:S; detection_filter:track by_src, count 25, seconds 60; classtype:attempted-admin; priority:1; metadata: moonshield yes, stage auth, direction internal; sid:9900010; rev:2;)
+alert tcp $HOME_NET any -> $HOME_NET 21   (msg:"JG AUTH: Possivel brute force FTP interno"; flow:to_server; flags:S; detection_filter:track by_src, count 20, seconds 60; classtype:attempted-admin; priority:2; metadata: moonshield yes, stage auth, direction internal; sid:9900011; rev:2;)
+alert tcp $HOME_NET any -> $HOME_NET 445  (msg:"JG AUTH/LATERAL: Muitas conexoes SMB internas"; flow:to_server; flags:S; detection_filter:track by_src, count 40, seconds 30; classtype:attempted-admin; priority:2; metadata: moonshield yes, stage auth, stage lateral, direction internal; sid:9900012; rev:2;)
+alert tcp $HOME_NET any -> $HOME_NET 5985 (msg:"JG AUTH: Possivel brute force WinRM HTTP interno (5985)"; flow:to_server; flags:S; detection_filter:track by_src, count 20, seconds 60; classtype:attempted-admin; priority:2; metadata: moonshield yes, stage auth, direction internal; sid:9900013; rev:2;)
+alert tcp $HOME_NET any -> $HOME_NET 5986 (msg:"JG AUTH: Possivel brute force WinRM HTTPS interno (5986)"; flow:to_server; flags:S; detection_filter:track by_src, count 20, seconds 60; classtype:attempted-admin; priority:2; metadata: moonshield yes, stage auth, direction internal; sid:9900014; rev:2;)
+alert tcp $HOME_NET any -> $HOME_NET 23   (msg:"JG AUTH: Possivel brute force Telnet interno"; flow:to_server; flags:S; detection_filter:track by_src, count 15, seconds 30; classtype:attempted-admin; priority:2; metadata: moonshield yes, stage auth, direction internal; sid:9900015; rev:2;)
+alert tcp $HOME_NET any -> $HOME_NET [80,443,8080,8443] (msg:"JG AUTH: Muitas tentativas em servico web interno"; flow:to_server; detection_filter:track by_src, count 60, seconds 30; classtype:web-application-attack; priority:2; metadata: moonshield yes, stage auth, direction internal; sid:9900016; rev:2;)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -66,14 +66,14 @@ alert tcp $HOME_NET any -> $HOME_NET [80,443,8080,8443] (msg:"JG AUTH: Muitas te
 # Cobre: $EXTERNAL_NET → $HOME_NET  (ataques vindos de fora / outra rede)
 # ═════════════════════════════════════════════════════════════════════════════
 
-alert tcp $EXTERNAL_NET any -> $HOME_NET 22   (msg:"JG AUTH EXT: Brute force SSH de origem externa"; flow:to_server; flags:S; detection_filter:track by_src, count 10, seconds 30; classtype:attempted-admin; priority:1; metadata: jarvis_guard yes, stage auth, direction inbound; sid:9900069; rev:1;)
-alert tcp $EXTERNAL_NET any -> $HOME_NET 3389 (msg:"JG AUTH EXT: Brute force RDP de origem externa"; flow:to_server; flags:S; detection_filter:track by_src, count 10, seconds 60; classtype:attempted-admin; priority:1; metadata: jarvis_guard yes, stage auth, direction inbound; sid:9900070; rev:1;)
-alert tcp $EXTERNAL_NET any -> $HOME_NET 21   (msg:"JG AUTH EXT: Brute force FTP de origem externa"; flow:to_server; flags:S; detection_filter:track by_src, count 10, seconds 60; classtype:attempted-admin; priority:1; metadata: jarvis_guard yes, stage auth, direction inbound; sid:9900071; rev:1;)
-alert tcp $EXTERNAL_NET any -> $HOME_NET 445  (msg:"JG AUTH EXT: Tentativas SMB de origem externa"; flow:to_server; flags:S; detection_filter:track by_src, count 10, seconds 30; classtype:attempted-admin; priority:1; metadata: jarvis_guard yes, stage auth, direction inbound; sid:9900072; rev:1;)
-alert tcp $EXTERNAL_NET any -> $HOME_NET 23   (msg:"JG AUTH EXT: Brute force Telnet de origem externa"; flow:to_server; flags:S; detection_filter:track by_src, count 8, seconds 30; classtype:attempted-admin; priority:1; metadata: jarvis_guard yes, stage auth, direction inbound; sid:9900073; rev:1;)
-alert tcp $EXTERNAL_NET any -> $HOME_NET 5985 (msg:"JG AUTH EXT: Brute force WinRM de origem externa"; flow:to_server; flags:S; detection_filter:track by_src, count 8, seconds 60; classtype:attempted-admin; priority:1; metadata: jarvis_guard yes, stage auth, direction inbound; sid:9900074; rev:1;)
-alert tcp $EXTERNAL_NET any -> $HOME_NET [80,443,8080,8443] (msg:"JG AUTH EXT: Muitas tentativas web de origem externa"; flow:to_server; detection_filter:track by_src, count 30, seconds 30; classtype:web-application-attack; priority:1; metadata: jarvis_guard yes, stage auth, direction inbound; sid:9900075; rev:1;)
-alert tcp $EXTERNAL_NET any -> $HOME_NET [1433,3306,5432,27017,6379] (msg:"JG AUTH EXT: Tentativas em banco de dados de origem externa"; flow:to_server; flags:S; detection_filter:track by_src, count 5, seconds 30; classtype:attempted-admin; priority:1; metadata: jarvis_guard yes, stage auth, direction inbound; sid:9900076; rev:1;)
+alert tcp $EXTERNAL_NET any -> $HOME_NET 22   (msg:"JG AUTH EXT: Brute force SSH de origem externa"; flow:to_server; flags:S; detection_filter:track by_src, count 10, seconds 30; classtype:attempted-admin; priority:1; metadata: moonshield yes, stage auth, direction inbound; sid:9900069; rev:1;)
+alert tcp $EXTERNAL_NET any -> $HOME_NET 3389 (msg:"JG AUTH EXT: Brute force RDP de origem externa"; flow:to_server; flags:S; detection_filter:track by_src, count 10, seconds 60; classtype:attempted-admin; priority:1; metadata: moonshield yes, stage auth, direction inbound; sid:9900070; rev:1;)
+alert tcp $EXTERNAL_NET any -> $HOME_NET 21   (msg:"JG AUTH EXT: Brute force FTP de origem externa"; flow:to_server; flags:S; detection_filter:track by_src, count 10, seconds 60; classtype:attempted-admin; priority:1; metadata: moonshield yes, stage auth, direction inbound; sid:9900071; rev:1;)
+alert tcp $EXTERNAL_NET any -> $HOME_NET 445  (msg:"JG AUTH EXT: Tentativas SMB de origem externa"; flow:to_server; flags:S; detection_filter:track by_src, count 10, seconds 30; classtype:attempted-admin; priority:1; metadata: moonshield yes, stage auth, direction inbound; sid:9900072; rev:1;)
+alert tcp $EXTERNAL_NET any -> $HOME_NET 23   (msg:"JG AUTH EXT: Brute force Telnet de origem externa"; flow:to_server; flags:S; detection_filter:track by_src, count 8, seconds 30; classtype:attempted-admin; priority:1; metadata: moonshield yes, stage auth, direction inbound; sid:9900073; rev:1;)
+alert tcp $EXTERNAL_NET any -> $HOME_NET 5985 (msg:"JG AUTH EXT: Brute force WinRM de origem externa"; flow:to_server; flags:S; detection_filter:track by_src, count 8, seconds 60; classtype:attempted-admin; priority:1; metadata: moonshield yes, stage auth, direction inbound; sid:9900074; rev:1;)
+alert tcp $EXTERNAL_NET any -> $HOME_NET [80,443,8080,8443] (msg:"JG AUTH EXT: Muitas tentativas web de origem externa"; flow:to_server; detection_filter:track by_src, count 30, seconds 30; classtype:web-application-attack; priority:1; metadata: moonshield yes, stage auth, direction inbound; sid:9900075; rev:1;)
+alert tcp $EXTERNAL_NET any -> $HOME_NET [1433,3306,5432,27017,6379] (msg:"JG AUTH EXT: Tentativas em banco de dados de origem externa"; flow:to_server; flags:S; detection_filter:track by_src, count 5, seconds 30; classtype:attempted-admin; priority:1; metadata: moonshield yes, stage auth, direction inbound; sid:9900076; rev:1;)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -81,12 +81,12 @@ alert tcp $EXTERNAL_NET any -> $HOME_NET [1433,3306,5432,27017,6379] (msg:"JG AU
 # Cobre: $HOME_NET → $HOME_NET
 # ═════════════════════════════════════════════════════════════════════════════
 
-alert tcp $HOME_NET any -> $HOME_NET 135  (msg:"JG LATERAL: Pico de conexoes RPC (135) na LAN"; flow:to_server; detection_filter:track by_src, count 40, seconds 30; classtype:misc-activity; priority:2; metadata: jarvis_guard yes, stage lateral, direction internal; sid:9900017; rev:2;)
-alert tcp $HOME_NET any -> $HOME_NET 139  (msg:"JG LATERAL: Pico de NetBIOS/SMB (139) na LAN"; flow:to_server; detection_filter:track by_src, count 30, seconds 30; classtype:misc-activity; priority:3; metadata: jarvis_guard yes, stage lateral, direction internal; sid:9900018; rev:2;)
-alert tcp $HOME_NET any -> $HOME_NET 445  (msg:"JG LATERAL: Varredura SMB em muitos alvos (445 sweep)"; flow:to_server; detection_filter:track by_src, count 80, seconds 60; classtype:misc-activity; priority:2; metadata: jarvis_guard yes, stage lateral, direction internal; sid:9900019; rev:2;)
-alert tcp $HOME_NET any -> $HOME_NET 1433 (msg:"JG LATERAL/DB: Pico de tentativas MSSQL na LAN"; flow:to_server; detection_filter:track by_src, count 15, seconds 30; classtype:attempted-recon; priority:3; metadata: jarvis_guard yes, stage lateral, direction internal; sid:9900020; rev:2;)
-alert tcp $HOME_NET any -> $HOME_NET 3306 (msg:"JG LATERAL/DB: Pico de tentativas MySQL na LAN"; flow:to_server; detection_filter:track by_src, count 15, seconds 30; classtype:attempted-recon; priority:3; metadata: jarvis_guard yes, stage lateral, direction internal; sid:9900021; rev:2;)
-alert tcp $HOME_NET any -> $HOME_NET 5432 (msg:"JG LATERAL/DB: Pico de tentativas PostgreSQL na LAN"; flow:to_server; detection_filter:track by_src, count 15, seconds 30; classtype:attempted-recon; priority:3; metadata: jarvis_guard yes, stage lateral, direction internal; sid:9900022; rev:2;)
+alert tcp $HOME_NET any -> $HOME_NET 135  (msg:"JG LATERAL: Pico de conexoes RPC (135) na LAN"; flow:to_server; detection_filter:track by_src, count 40, seconds 30; classtype:misc-activity; priority:2; metadata: moonshield yes, stage lateral, direction internal; sid:9900017; rev:2;)
+alert tcp $HOME_NET any -> $HOME_NET 139  (msg:"JG LATERAL: Pico de NetBIOS/SMB (139) na LAN"; flow:to_server; detection_filter:track by_src, count 30, seconds 30; classtype:misc-activity; priority:3; metadata: moonshield yes, stage lateral, direction internal; sid:9900018; rev:2;)
+alert tcp $HOME_NET any -> $HOME_NET 445  (msg:"JG LATERAL: Varredura SMB em muitos alvos (445 sweep)"; flow:to_server; detection_filter:track by_src, count 80, seconds 60; classtype:misc-activity; priority:2; metadata: moonshield yes, stage lateral, direction internal; sid:9900019; rev:2;)
+alert tcp $HOME_NET any -> $HOME_NET 1433 (msg:"JG LATERAL/DB: Pico de tentativas MSSQL na LAN"; flow:to_server; detection_filter:track by_src, count 15, seconds 30; classtype:attempted-recon; priority:3; metadata: moonshield yes, stage lateral, direction internal; sid:9900020; rev:2;)
+alert tcp $HOME_NET any -> $HOME_NET 3306 (msg:"JG LATERAL/DB: Pico de tentativas MySQL na LAN"; flow:to_server; detection_filter:track by_src, count 15, seconds 30; classtype:attempted-recon; priority:3; metadata: moonshield yes, stage lateral, direction internal; sid:9900021; rev:2;)
+alert tcp $HOME_NET any -> $HOME_NET 5432 (msg:"JG LATERAL/DB: Pico de tentativas PostgreSQL na LAN"; flow:to_server; detection_filter:track by_src, count 15, seconds 30; classtype:attempted-recon; priority:3; metadata: moonshield yes, stage lateral, direction internal; sid:9900022; rev:2;)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -94,17 +94,17 @@ alert tcp $HOME_NET any -> $HOME_NET 5432 (msg:"JG LATERAL/DB: Pico de tentativa
 # Cobre: $HOME_NET → $EXTERNAL_NET
 # ═════════════════════════════════════════════════════════════════════════════
 
-alert udp $HOME_NET any -> [8.8.8.8,8.8.4.4] 53 (msg:"JG DNS POLICY: Bypass DNS - Google DNS (8.8.8.x)"; detection_filter:track by_src, count 3, seconds 60; classtype:policy-violation; priority:3; metadata: jarvis_guard yes, tag bypass-dns; sid:9900023; rev:2;)
-alert udp $HOME_NET any -> [1.1.1.1,1.0.0.1] 53 (msg:"JG DNS POLICY: Bypass DNS - Cloudflare (1.1.1.x)"; detection_filter:track by_src, count 3, seconds 60; classtype:policy-violation; priority:3; metadata: jarvis_guard yes, tag bypass-dns; sid:9900024; rev:2;)
-alert udp $HOME_NET any -> [9.9.9.9,149.112.112.112] 53 (msg:"JG DNS POLICY: Bypass DNS - Quad9 (9.9.9.x)"; detection_filter:track by_src, count 3, seconds 60; classtype:policy-violation; priority:3; metadata: jarvis_guard yes, tag bypass-dns; sid:9900025; rev:2;)
-alert udp $HOME_NET any -> $EXTERNAL_NET 53 (msg:"JG DNS: Volume alto de consultas DNS externas (possivel DGA)"; detection_filter:track by_src, count 120, seconds 60; classtype:misc-activity; priority:3; metadata: jarvis_guard yes; sid:9900026; rev:2;)
-alert udp $HOME_NET any -> $EXTERNAL_NET 53 (msg:"JG DNS: Alto volume DNS (verificar NXDOMAIN no painel)"; detection_filter:track by_src, count 200, seconds 60; classtype:misc-activity; priority:3; metadata: jarvis_guard yes, tag nxdomain-candidate; sid:9900027; rev:2;)
-alert dns $HOME_NET any -> $EXTERNAL_NET any (msg:"JG DNS: Consulta a ip-api.com (descoberta de IP externo)"; dns.query; content:"ip-api.com"; nocase; classtype:misc-activity; priority:2; metadata: jarvis_guard yes, tag external-ip-lookup; sid:9900028; rev:2;)
-alert dns $HOME_NET any -> $EXTERNAL_NET any (msg:"JG DNS: Consulta a ifconfig.me (descoberta de IP externo)"; dns.query; content:"ifconfig.me"; nocase; classtype:misc-activity; priority:2; metadata: jarvis_guard yes, tag external-ip-lookup; sid:9900029; rev:2;)
-alert dns $HOME_NET any -> $EXTERNAL_NET any (msg:"JG DNS: Consulta a api.ipify.org (descoberta de IP externo)"; dns.query; content:"api.ipify.org"; nocase; classtype:misc-activity; priority:2; metadata: jarvis_guard yes, tag external-ip-lookup; sid:9900030; rev:2;)
-alert dns $HOME_NET any -> $EXTERNAL_NET any (msg:"JG DNS: Consulta a checkip.amazonaws.com (descoberta de IP externo)"; dns.query; content:"checkip.amazonaws.com"; nocase; classtype:misc-activity; priority:2; metadata: jarvis_guard yes, tag external-ip-lookup; sid:9900031; rev:2;)
-alert dns $HOME_NET any -> $EXTERNAL_NET any (msg:"JG DNS: Consulta a servico whatismyip"; dns.query; content:"whatismyip"; nocase; classtype:misc-activity; priority:2; metadata: jarvis_guard yes, tag external-ip-lookup; sid:9900032; rev:3;)
-alert dns $HOME_NET any -> $EXTERNAL_NET any (msg:"JG DNS: Consulta a servico icanhazip"; dns.query; content:"icanhazip"; nocase; classtype:misc-activity; priority:2; metadata: jarvis_guard yes, tag external-ip-lookup; sid:9900059; rev:1;)
+alert udp $HOME_NET any -> [8.8.8.8,8.8.4.4] 53 (msg:"JG DNS POLICY: Bypass DNS - Google DNS (8.8.8.x)"; detection_filter:track by_src, count 3, seconds 60; classtype:policy-violation; priority:3; metadata: moonshield yes, tag bypass-dns; sid:9900023; rev:2;)
+alert udp $HOME_NET any -> [1.1.1.1,1.0.0.1] 53 (msg:"JG DNS POLICY: Bypass DNS - Cloudflare (1.1.1.x)"; detection_filter:track by_src, count 3, seconds 60; classtype:policy-violation; priority:3; metadata: moonshield yes, tag bypass-dns; sid:9900024; rev:2;)
+alert udp $HOME_NET any -> [9.9.9.9,149.112.112.112] 53 (msg:"JG DNS POLICY: Bypass DNS - Quad9 (9.9.9.x)"; detection_filter:track by_src, count 3, seconds 60; classtype:policy-violation; priority:3; metadata: moonshield yes, tag bypass-dns; sid:9900025; rev:2;)
+alert udp $HOME_NET any -> $EXTERNAL_NET 53 (msg:"JG DNS: Volume alto de consultas DNS externas (possivel DGA)"; detection_filter:track by_src, count 120, seconds 60; classtype:misc-activity; priority:3; metadata: moonshield yes; sid:9900026; rev:2;)
+alert udp $HOME_NET any -> $EXTERNAL_NET 53 (msg:"JG DNS: Alto volume DNS (verificar NXDOMAIN no painel)"; detection_filter:track by_src, count 200, seconds 60; classtype:misc-activity; priority:3; metadata: moonshield yes, tag nxdomain-candidate; sid:9900027; rev:2;)
+alert dns $HOME_NET any -> $EXTERNAL_NET any (msg:"JG DNS: Consulta a ip-api.com (descoberta de IP externo)"; dns.query; content:"ip-api.com"; nocase; classtype:misc-activity; priority:2; metadata: moonshield yes, tag external-ip-lookup; sid:9900028; rev:2;)
+alert dns $HOME_NET any -> $EXTERNAL_NET any (msg:"JG DNS: Consulta a ifconfig.me (descoberta de IP externo)"; dns.query; content:"ifconfig.me"; nocase; classtype:misc-activity; priority:2; metadata: moonshield yes, tag external-ip-lookup; sid:9900029; rev:2;)
+alert dns $HOME_NET any -> $EXTERNAL_NET any (msg:"JG DNS: Consulta a api.ipify.org (descoberta de IP externo)"; dns.query; content:"api.ipify.org"; nocase; classtype:misc-activity; priority:2; metadata: moonshield yes, tag external-ip-lookup; sid:9900030; rev:2;)
+alert dns $HOME_NET any -> $EXTERNAL_NET any (msg:"JG DNS: Consulta a checkip.amazonaws.com (descoberta de IP externo)"; dns.query; content:"checkip.amazonaws.com"; nocase; classtype:misc-activity; priority:2; metadata: moonshield yes, tag external-ip-lookup; sid:9900031; rev:2;)
+alert dns $HOME_NET any -> $EXTERNAL_NET any (msg:"JG DNS: Consulta a servico whatismyip"; dns.query; content:"whatismyip"; nocase; classtype:misc-activity; priority:2; metadata: moonshield yes, tag external-ip-lookup; sid:9900032; rev:3;)
+alert dns $HOME_NET any -> $EXTERNAL_NET any (msg:"JG DNS: Consulta a servico icanhazip"; dns.query; content:"icanhazip"; nocase; classtype:misc-activity; priority:2; metadata: moonshield yes, tag external-ip-lookup; sid:9900059; rev:1;)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -112,14 +112,14 @@ alert dns $HOME_NET any -> $EXTERNAL_NET any (msg:"JG DNS: Consulta a servico ic
 # Cobre: $HOME_NET → $EXTERNAL_NET
 # ═════════════════════════════════════════════════════════════════════════════
 
-alert tcp $HOME_NET any -> $EXTERNAL_NET any (msg:"JG POLICY: Trafego P2P BitTorrent (handshake)"; flow:to_server,established; content:"BitTorrent protocol"; depth:19; classtype:policy-violation; priority:3; metadata: jarvis_guard yes, category p2p; sid:9900033; rev:2;)
-alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"JG POLICY: Requisicao HTTP para tracker BitTorrent"; flow:to_server,established; http.uri; content:"/announce"; nocase; classtype:policy-violation; priority:3; metadata: jarvis_guard yes, category p2p; sid:9900034; rev:3;)
-alert tcp $HOME_NET any -> $EXTERNAL_NET [3333,4444,5555,7777,9000,14444,45560] (msg:"JG POLICY: Possivel mineracao cripto (mining.subscribe)"; flow:to_server,established; content:"mining.subscribe"; nocase; classtype:policy-violation; priority:2; metadata: jarvis_guard yes, category mining; sid:9900035; rev:2;)
-alert tcp $HOME_NET any -> $EXTERNAL_NET [3333,4444,5555,7777,9000,14444,45560] (msg:"JG POLICY: Possivel mineracao cripto (mining.authorize)"; flow:to_server,established; content:"mining.authorize"; nocase; classtype:policy-violation; priority:2; metadata: jarvis_guard yes, category mining; sid:9900036; rev:2;)
-alert dns $HOME_NET any -> $EXTERNAL_NET any (msg:"JG POLICY: Consulta DNS pool mineracao (xmr)"; dns.query; content:"xmr"; nocase; classtype:policy-violation; priority:2; metadata: jarvis_guard yes, category mining; sid:9900037; rev:3;)
-alert dns $HOME_NET any -> $EXTERNAL_NET any (msg:"JG POLICY: Consulta DNS pool mineracao (monero)"; dns.query; content:"monero"; nocase; classtype:policy-violation; priority:2; metadata: jarvis_guard yes, category mining; sid:9900060; rev:1;)
-alert dns $HOME_NET any -> $EXTERNAL_NET any (msg:"JG POLICY: Consulta DNS pool mineracao (nicehash)"; dns.query; content:"nicehash"; nocase; classtype:policy-violation; priority:2; metadata: jarvis_guard yes, category mining; sid:9900096; rev:1;)
-alert tcp $HOME_NET any -> $EXTERNAL_NET [9001,9030,9050,9051] (msg:"JG POLICY: Conexao para porta Tor"; flow:to_server,established; classtype:policy-violation; priority:3; metadata: jarvis_guard yes, category proxy; sid:9900038; rev:2;)
+alert tcp $HOME_NET any -> $EXTERNAL_NET any (msg:"JG POLICY: Trafego P2P BitTorrent (handshake)"; flow:to_server,established; content:"BitTorrent protocol"; depth:19; classtype:policy-violation; priority:3; metadata: moonshield yes, category p2p; sid:9900033; rev:2;)
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"JG POLICY: Requisicao HTTP para tracker BitTorrent"; flow:to_server,established; http.uri; content:"/announce"; nocase; classtype:policy-violation; priority:3; metadata: moonshield yes, category p2p; sid:9900034; rev:3;)
+alert tcp $HOME_NET any -> $EXTERNAL_NET [3333,4444,5555,7777,9000,14444,45560] (msg:"JG POLICY: Possivel mineracao cripto (mining.subscribe)"; flow:to_server,established; content:"mining.subscribe"; nocase; classtype:policy-violation; priority:2; metadata: moonshield yes, category mining; sid:9900035; rev:2;)
+alert tcp $HOME_NET any -> $EXTERNAL_NET [3333,4444,5555,7777,9000,14444,45560] (msg:"JG POLICY: Possivel mineracao cripto (mining.authorize)"; flow:to_server,established; content:"mining.authorize"; nocase; classtype:policy-violation; priority:2; metadata: moonshield yes, category mining; sid:9900036; rev:2;)
+alert dns $HOME_NET any -> $EXTERNAL_NET any (msg:"JG POLICY: Consulta DNS pool mineracao (xmr)"; dns.query; content:"xmr"; nocase; classtype:policy-violation; priority:2; metadata: moonshield yes, category mining; sid:9900037; rev:3;)
+alert dns $HOME_NET any -> $EXTERNAL_NET any (msg:"JG POLICY: Consulta DNS pool mineracao (monero)"; dns.query; content:"monero"; nocase; classtype:policy-violation; priority:2; metadata: moonshield yes, category mining; sid:9900060; rev:1;)
+alert dns $HOME_NET any -> $EXTERNAL_NET any (msg:"JG POLICY: Consulta DNS pool mineracao (nicehash)"; dns.query; content:"nicehash"; nocase; classtype:policy-violation; priority:2; metadata: moonshield yes, category mining; sid:9900096; rev:1;)
+alert tcp $HOME_NET any -> $EXTERNAL_NET [9001,9030,9050,9051] (msg:"JG POLICY: Conexao para porta Tor"; flow:to_server,established; classtype:policy-violation; priority:3; metadata: moonshield yes, category proxy; sid:9900038; rev:2;)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -127,13 +127,13 @@ alert tcp $HOME_NET any -> $EXTERNAL_NET [9001,9030,9050,9051] (msg:"JG POLICY: 
 # Cobre: $HOME_NET → $EXTERNAL_NET
 # ═════════════════════════════════════════════════════════════════════════════
 
-alert tcp $HOME_NET any -> $EXTERNAL_NET any (msg:"JG ANOMALIA: Muitas conexoes TCP externas (possivel bot)"; flow:to_server; flags:S; detection_filter:track by_src, count 300, seconds 60; classtype:misc-activity; priority:3; metadata: jarvis_guard yes, tag bot; sid:9900039; rev:2;)
-alert icmp $HOME_NET any -> $EXTERNAL_NET any (msg:"JG ANOMALIA: Volume alto de ICMP externo (possivel tunel ICMP)"; itype:8; detection_filter:track by_src, count 80, seconds 60; classtype:misc-activity; priority:3; metadata: jarvis_guard yes, tag icmp-tunnel; sid:9900040; rev:2;)
-alert tls $HOME_NET any -> $EXTERNAL_NET any (msg:"JG ANOMALIA: TLS repetitivo (possivel beaconing)"; flow:to_server,established; detection_filter:track by_src, count 120, seconds 300; classtype:misc-activity; priority:3; metadata: jarvis_guard yes, tag beaconing; sid:9900041; rev:2;)
-alert dns $HOME_NET any -> $EXTERNAL_NET any (msg:"JG ANOMALIA: Consulta DNS frequente (possivel beaconing)"; detection_filter:track by_src, count 60, seconds 120; classtype:misc-activity; priority:3; metadata: jarvis_guard yes, tag beaconing; sid:9900042; rev:2;)
-alert tcp $HOME_NET any -> $EXTERNAL_NET [1337,4444,6667,6697,31337,9001,55553,54321,12345] (msg:"JG C2: Conexao para porta externa suspeita (C2/backdoor/IRC)"; flow:to_server,established; classtype:trojan-activity; priority:2; metadata: jarvis_guard yes, category c2; sid:9900043; rev:2;)
+alert tcp $HOME_NET any -> $EXTERNAL_NET any (msg:"JG ANOMALIA: Muitas conexoes TCP externas (possivel bot)"; flow:to_server; flags:S; detection_filter:track by_src, count 300, seconds 60; classtype:misc-activity; priority:3; metadata: moonshield yes, tag bot; sid:9900039; rev:2;)
+alert icmp $HOME_NET any -> $EXTERNAL_NET any (msg:"JG ANOMALIA: Volume alto de ICMP externo (possivel tunel ICMP)"; itype:8; detection_filter:track by_src, count 80, seconds 60; classtype:misc-activity; priority:3; metadata: moonshield yes, tag icmp-tunnel; sid:9900040; rev:2;)
+alert tls $HOME_NET any -> $EXTERNAL_NET any (msg:"JG ANOMALIA: TLS repetitivo (possivel beaconing)"; flow:to_server,established; detection_filter:track by_src, count 120, seconds 300; classtype:misc-activity; priority:3; metadata: moonshield yes, tag beaconing; sid:9900041; rev:2;)
+alert dns $HOME_NET any -> $EXTERNAL_NET any (msg:"JG ANOMALIA: Consulta DNS frequente (possivel beaconing)"; detection_filter:track by_src, count 60, seconds 120; classtype:misc-activity; priority:3; metadata: moonshield yes, tag beaconing; sid:9900042; rev:2;)
+alert tcp $HOME_NET any -> $EXTERNAL_NET [1337,4444,6667,6697,31337,9001,55553,54321,12345] (msg:"JG C2: Conexao para porta externa suspeita (C2/backdoor/IRC)"; flow:to_server,established; classtype:trojan-activity; priority:2; metadata: moonshield yes, category c2; sid:9900043; rev:2;)
 # SID 9900044 removido (pcre UA vazio instavel entre versoes Suricata — detectar no Django via eve.json)
-alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"JG SUSPEITO: Download de executavel (.exe) via HTTP"; flow:to_server,established; http.uri; content:".exe"; nocase; classtype:misc-activity; priority:2; metadata: jarvis_guard yes, tag exe-download; sid:9900045; rev:2;)
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"JG SUSPEITO: Download de executavel (.exe) via HTTP"; flow:to_server,established; http.uri; content:".exe"; nocase; classtype:misc-activity; priority:2; metadata: moonshield yes, tag exe-download; sid:9900045; rev:2;)
 # SID 9900046 (DGA pcre) — melhor detectar no Django via eve.json (dominio longo sem vogais)
 
 
@@ -142,10 +142,10 @@ alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"JG SUSPEITO: Download de exe
 # Cobre: $HOME_NET → $EXTERNAL_NET
 # ═════════════════════════════════════════════════════════════════════════════
 
-alert udp $HOME_NET any -> $EXTERNAL_NET 443 (msg:"JG TLS/QUIC: Trafego QUIC detectado (UDP/443)"; classtype:misc-activity; priority:4; metadata: jarvis_guard yes, tag quic; sid:9900047; rev:2;)
-alert tls $HOME_NET any -> $EXTERNAL_NET any (msg:"JG TLS: SNI com subdomain numerico (indicativo suspeito)"; flow:to_server,established; tls.sni; pcre:"/^\\d{4,}\\./"; classtype:misc-activity; priority:2; metadata: jarvis_guard yes, tag suspicious-sni; sid:9900048; rev:2;)
-alert tls $HOME_NET any -> $EXTERNAL_NET any (msg:"JG TLS: Conexao TLS sem SNI (verificar no painel)"; flow:to_server,established; classtype:misc-activity; priority:3; metadata: jarvis_guard yes, tag no-sni-candidate; sid:9900049; rev:2;)
-alert udp $HOME_NET any -> $EXTERNAL_NET 443 (msg:"JG TLS/QUIC: Volume alto de QUIC - possivel bypass"; detection_filter:track by_src, count 200, seconds 60; classtype:misc-activity; priority:3; metadata: jarvis_guard yes, tag quic-volume; sid:9900050; rev:2;)
+alert udp $HOME_NET any -> $EXTERNAL_NET 443 (msg:"JG TLS/QUIC: Trafego QUIC detectado (UDP/443)"; classtype:misc-activity; priority:4; metadata: moonshield yes, tag quic; sid:9900047; rev:2;)
+alert tls $HOME_NET any -> $EXTERNAL_NET any (msg:"JG TLS: SNI com subdomain numerico (indicativo suspeito)"; flow:to_server,established; tls.sni; pcre:"/^\\d{4,}\\./"; classtype:misc-activity; priority:2; metadata: moonshield yes, tag suspicious-sni; sid:9900048; rev:2;)
+alert tls $HOME_NET any -> $EXTERNAL_NET any (msg:"JG TLS: Conexao TLS sem SNI (verificar no painel)"; flow:to_server,established; classtype:misc-activity; priority:3; metadata: moonshield yes, tag no-sni-candidate; sid:9900049; rev:2;)
+alert udp $HOME_NET any -> $EXTERNAL_NET 443 (msg:"JG TLS/QUIC: Volume alto de QUIC - possivel bypass"; detection_filter:track by_src, count 200, seconds 60; classtype:misc-activity; priority:3; metadata: moonshield yes, tag quic-volume; sid:9900050; rev:2;)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -153,26 +153,26 @@ alert udp $HOME_NET any -> $EXTERNAL_NET 443 (msg:"JG TLS/QUIC: Volume alto de Q
 # Cobre: $HOME_NET → $HOME_NET
 # ═════════════════════════════════════════════════════════════════════════════
 
-alert tcp $HOME_NET any -> $HOME_NET any (msg:"JG RECON: Nmap NULL scan interno (sem flags TCP)"; flags:0; classtype:attempted-recon; priority:2; metadata: jarvis_guard yes, stage recon, tag nmap, direction internal; sid:9900051; rev:2;)
-alert tcp $HOME_NET any -> $HOME_NET any (msg:"JG RECON: Nmap XMAS scan interno (FIN+PSH+URG)"; flags:FPU; classtype:attempted-recon; priority:2; metadata: jarvis_guard yes, stage recon, tag nmap, direction internal; sid:9900052; rev:2;)
-alert tcp $HOME_NET any -> $HOME_NET any (msg:"JG RECON: Flag TCP anomala SYN+FIN interno (Nmap/OS fingerprint)"; flags:SF; classtype:attempted-recon; priority:2; metadata: jarvis_guard yes, stage recon, tag nmap, direction internal; sid:9900053; rev:2;)
+alert tcp $HOME_NET any -> $HOME_NET any (msg:"JG RECON: Nmap NULL scan interno (sem flags TCP)"; flags:0; classtype:attempted-recon; priority:2; metadata: moonshield yes, stage recon, tag nmap, direction internal; sid:9900051; rev:2;)
+alert tcp $HOME_NET any -> $HOME_NET any (msg:"JG RECON: Nmap XMAS scan interno (FIN+PSH+URG)"; flags:FPU; classtype:attempted-recon; priority:2; metadata: moonshield yes, stage recon, tag nmap, direction internal; sid:9900052; rev:2;)
+alert tcp $HOME_NET any -> $HOME_NET any (msg:"JG RECON: Flag TCP anomala SYN+FIN interno (Nmap/OS fingerprint)"; flags:SF; classtype:attempted-recon; priority:2; metadata: moonshield yes, stage recon, tag nmap, direction internal; sid:9900053; rev:2;)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 # GRUPO I — DNS TUNNELING  (9900054–9900055)
 # ═════════════════════════════════════════════════════════════════════════════
 
-alert udp $HOME_NET any -> any 53 (msg:"JG DNS: Payload UDP/DNS muito grande (possivel DNS tunneling)"; dsize:>150; classtype:misc-activity; priority:2; metadata: jarvis_guard yes, tag dns-tunnel; sid:9900054; rev:2;)
-alert dns $HOME_NET any -> $EXTERNAL_NET any (msg:"JG DNS: Label longo em consulta (possivel DNS tunneling)"; dns.query; pcre:"/[a-z0-9\\-]{50,}\\./i"; classtype:misc-activity; priority:2; metadata: jarvis_guard yes, tag dns-tunnel; sid:9900055; rev:2;)
+alert udp $HOME_NET any -> any 53 (msg:"JG DNS: Payload UDP/DNS muito grande (possivel DNS tunneling)"; dsize:>150; classtype:misc-activity; priority:2; metadata: moonshield yes, tag dns-tunnel; sid:9900054; rev:2;)
+alert dns $HOME_NET any -> $EXTERNAL_NET any (msg:"JG DNS: Label longo em consulta (possivel DNS tunneling)"; dns.query; pcre:"/[a-z0-9\\-]{50,}\\./i"; classtype:misc-activity; priority:2; metadata: moonshield yes, tag dns-tunnel; sid:9900055; rev:2;)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 # GRUPO J — HOST SWEEP  (9900056–9900058)
 # ═════════════════════════════════════════════════════════════════════════════
 
-alert tcp $HOME_NET any -> $HOME_NET any (msg:"JG LATERAL: Host sweep interno agressivo (muitos destinos)"; flow:to_server; flags:S; detection_filter:track by_src, count 50, seconds 10; classtype:attempted-recon; priority:2; metadata: jarvis_guard yes, stage recon, stage lateral, direction internal; sid:9900056; rev:2;)
-alert tcp $EXTERNAL_NET any -> $HOME_NET any (msg:"JG RECON EXT: Host sweep externo agressivo"; flow:to_server; flags:S; detection_filter:track by_src, count 30, seconds 10; classtype:attempted-recon; priority:1; metadata: jarvis_guard yes, stage recon, direction inbound; sid:9900057; rev:1;)
-alert icmp $EXTERNAL_NET any -> $HOME_NET any (msg:"JG RECON EXT: Ping sweep externo agressivo"; itype:8; detection_filter:track by_src, count 15, seconds 10; classtype:attempted-recon; priority:1; metadata: jarvis_guard yes, stage recon, direction inbound; sid:9900058; rev:1;)
+alert tcp $HOME_NET any -> $HOME_NET any (msg:"JG LATERAL: Host sweep interno agressivo (muitos destinos)"; flow:to_server; flags:S; detection_filter:track by_src, count 50, seconds 10; classtype:attempted-recon; priority:2; metadata: moonshield yes, stage recon, stage lateral, direction internal; sid:9900056; rev:2;)
+alert tcp $EXTERNAL_NET any -> $HOME_NET any (msg:"JG RECON EXT: Host sweep externo agressivo"; flow:to_server; flags:S; detection_filter:track by_src, count 30, seconds 10; classtype:attempted-recon; priority:1; metadata: moonshield yes, stage recon, direction inbound; sid:9900057; rev:1;)
+alert icmp $EXTERNAL_NET any -> $HOME_NET any (msg:"JG RECON EXT: Ping sweep externo agressivo"; itype:8; detection_filter:track by_src, count 15, seconds 10; classtype:attempted-recon; priority:1; metadata: moonshield yes, stage recon, direction inbound; sid:9900058; rev:1;)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -180,16 +180,16 @@ alert icmp $EXTERNAL_NET any -> $HOME_NET any (msg:"JG RECON EXT: Ping sweep ext
 # Cobre: $EXTERNAL_NET → $HOME_NET
 # ═════════════════════════════════════════════════════════════════════════════
 
-alert tcp $EXTERNAL_NET any -> $HOME_NET 445 (msg:"JG EXPLOIT EXT: Possivel EternalBlue/SMB exploit de origem externa"; flow:to_server,established; content:"|00 00 00 00 ff 53 4d 42|"; depth:9; classtype:attempted-admin; priority:1; metadata: jarvis_guard yes, tag exploit, tag eternalblue, direction inbound; sid:9900077; rev:1;)
-alert tcp $EXTERNAL_NET any -> $HOME_NET 80  (msg:"JG EXPLOIT EXT: Possivel SQL Injection via HTTP"; flow:to_server,established; http.uri; pcre:"/(?:union.*select|select.*from|insert.*into|drop.*table|exec.*xp_)/i"; classtype:web-application-attack; priority:1; metadata: jarvis_guard yes, tag sqli, direction inbound; sid:9900078; rev:1;)
-alert tcp $EXTERNAL_NET any -> $HOME_NET 80  (msg:"JG EXPLOIT EXT: Possivel XSS via HTTP"; flow:to_server,established; http.uri; pcre:"/<script[^>]*>/i"; classtype:web-application-attack; priority:2; metadata: jarvis_guard yes, tag xss, direction inbound; sid:9900079; rev:1;)
-alert tcp $EXTERNAL_NET any -> $HOME_NET 80  (msg:"JG EXPLOIT EXT: Possivel Path Traversal via HTTP"; flow:to_server,established; http.uri; content:"../"; classtype:web-application-attack; priority:2; metadata: jarvis_guard yes, tag path-traversal, direction inbound; sid:9900080; rev:1;)
-alert http $EXTERNAL_NET any -> $HOME_NET any (msg:"JG EXPLOIT EXT: Possivel shell command injection via HTTP (whoami)"; flow:to_server,established; http.uri; content:"whoami"; nocase; classtype:web-application-attack; priority:1; metadata: jarvis_guard yes, tag cmdi, direction inbound; sid:9900081; rev:2;)
-alert tcp $EXTERNAL_NET any -> $HOME_NET 22  (msg:"JG EXPLOIT EXT: Conexao SSH de IP externo desconhecido"; flow:to_server,established; detection_filter:track by_src, count 3, seconds 60; classtype:attempted-admin; priority:2; metadata: jarvis_guard yes, tag ssh-external, direction inbound; sid:9900082; rev:1;)
-alert tcp $EXTERNAL_NET any -> $HOME_NET 3389 (msg:"JG EXPLOIT EXT: Conexao RDP de origem externa"; flow:to_server,established; detection_filter:track by_src, count 3, seconds 60; classtype:attempted-admin; priority:1; metadata: jarvis_guard yes, tag rdp-external, direction inbound; sid:9900083; rev:1;)
-alert udp $EXTERNAL_NET any -> $HOME_NET 53  (msg:"JG EXPLOIT EXT: Volume alto de consultas DNS de origem externa (possivel amplificacao)"; detection_filter:track by_src, count 50, seconds 10; classtype:misc-activity; priority:2; metadata: jarvis_guard yes, tag dns-amplification, direction inbound; sid:9900084; rev:1;)
-alert tcp $EXTERNAL_NET any -> $HOME_NET any (msg:"JG EXPLOIT EXT: Flag TCP SYN+FIN de origem externa (probe)"; flags:SF; classtype:attempted-recon; priority:1; metadata: jarvis_guard yes, tag nmap, direction inbound; sid:9900085; rev:1;)
-alert tcp $EXTERNAL_NET any -> $HOME_NET [6379,27017,9200,5601,2375] (msg:"JG EXPLOIT EXT: Tentativa de acesso a servico exposto (Redis/Mongo/ES/Docker)"; flow:to_server; flags:S; classtype:attempted-admin; priority:1; metadata: jarvis_guard yes, tag exposed-service, direction inbound; sid:9900086; rev:1;)
+alert tcp $EXTERNAL_NET any -> $HOME_NET 445 (msg:"JG EXPLOIT EXT: Possivel EternalBlue/SMB exploit de origem externa"; flow:to_server,established; content:"|00 00 00 00 ff 53 4d 42|"; depth:9; classtype:attempted-admin; priority:1; metadata: moonshield yes, tag exploit, tag eternalblue, direction inbound; sid:9900077; rev:1;)
+alert tcp $EXTERNAL_NET any -> $HOME_NET 80  (msg:"JG EXPLOIT EXT: Possivel SQL Injection via HTTP"; flow:to_server,established; http.uri; pcre:"/(?:union.*select|select.*from|insert.*into|drop.*table|exec.*xp_)/i"; classtype:web-application-attack; priority:1; metadata: moonshield yes, tag sqli, direction inbound; sid:9900078; rev:1;)
+alert tcp $EXTERNAL_NET any -> $HOME_NET 80  (msg:"JG EXPLOIT EXT: Possivel XSS via HTTP"; flow:to_server,established; http.uri; pcre:"/<script[^>]*>/i"; classtype:web-application-attack; priority:2; metadata: moonshield yes, tag xss, direction inbound; sid:9900079; rev:1;)
+alert tcp $EXTERNAL_NET any -> $HOME_NET 80  (msg:"JG EXPLOIT EXT: Possivel Path Traversal via HTTP"; flow:to_server,established; http.uri; content:"../"; classtype:web-application-attack; priority:2; metadata: moonshield yes, tag path-traversal, direction inbound; sid:9900080; rev:1;)
+alert http $EXTERNAL_NET any -> $HOME_NET any (msg:"JG EXPLOIT EXT: Possivel shell command injection via HTTP (whoami)"; flow:to_server,established; http.uri; content:"whoami"; nocase; classtype:web-application-attack; priority:1; metadata: moonshield yes, tag cmdi, direction inbound; sid:9900081; rev:2;)
+alert tcp $EXTERNAL_NET any -> $HOME_NET 22  (msg:"JG EXPLOIT EXT: Conexao SSH de IP externo desconhecido"; flow:to_server,established; detection_filter:track by_src, count 3, seconds 60; classtype:attempted-admin; priority:2; metadata: moonshield yes, tag ssh-external, direction inbound; sid:9900082; rev:1;)
+alert tcp $EXTERNAL_NET any -> $HOME_NET 3389 (msg:"JG EXPLOIT EXT: Conexao RDP de origem externa"; flow:to_server,established; detection_filter:track by_src, count 3, seconds 60; classtype:attempted-admin; priority:1; metadata: moonshield yes, tag rdp-external, direction inbound; sid:9900083; rev:1;)
+alert udp $EXTERNAL_NET any -> $HOME_NET 53  (msg:"JG EXPLOIT EXT: Volume alto de consultas DNS de origem externa (possivel amplificacao)"; detection_filter:track by_src, count 50, seconds 10; classtype:misc-activity; priority:2; metadata: moonshield yes, tag dns-amplification, direction inbound; sid:9900084; rev:1;)
+alert tcp $EXTERNAL_NET any -> $HOME_NET any (msg:"JG EXPLOIT EXT: Flag TCP SYN+FIN de origem externa (probe)"; flags:SF; classtype:attempted-recon; priority:1; metadata: moonshield yes, tag nmap, direction inbound; sid:9900085; rev:1;)
+alert tcp $EXTERNAL_NET any -> $HOME_NET [6379,27017,9200,5601,2375] (msg:"JG EXPLOIT EXT: Tentativa de acesso a servico exposto (Redis/Mongo/ES/Docker)"; flow:to_server; flags:S; classtype:attempted-admin; priority:1; metadata: moonshield yes, tag exposed-service, direction inbound; sid:9900086; rev:1;)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -197,13 +197,14 @@ alert tcp $EXTERNAL_NET any -> $HOME_NET [6379,27017,9200,5601,2375] (msg:"JG EX
 # Cobre: $HOME_NET → $EXTERNAL_NET
 # ═════════════════════════════════════════════════════════════════════════════
 
-alert tcp $HOME_NET any -> $EXTERNAL_NET any (msg:"JG EXFIL: Volume alto de dados saindo (possivel exfiltracao)"; flow:to_server,established; detection_filter:track by_src, count 500, seconds 60; classtype:misc-activity; priority:2; metadata: jarvis_guard yes, tag exfil; sid:9900091; rev:1;)
-alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"JG EXFIL: Requisicao POST HTTP saindo (possivel exfiltracao)"; flow:to_server,established; http.method; content:"POST"; classtype:misc-activity; priority:2; metadata: jarvis_guard yes, tag exfil; sid:9900092; rev:4;)
-alert dns $HOME_NET any -> $EXTERNAL_NET any (msg:"JG C2: Consulta DNS para dominio .onion via DNS (Tor)"; dns.query; content:".onion"; nocase; classtype:trojan-activity; priority:1; metadata: jarvis_guard yes, tag tor, category c2; sid:9900093; rev:1;)
-alert tcp $HOME_NET any -> $EXTERNAL_NET [4444,5555,8888,9999,1234,6666] (msg:"JG C2: Conexao para porta C2 comum de origem interna"; flow:to_server,established; classtype:trojan-activity; priority:1; metadata: jarvis_guard yes, category c2; sid:9900094; rev:1;)
-alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"JG C2: User-Agent sqlmap detectado"; flow:to_server,established; http.user_agent; content:"sqlmap"; nocase; classtype:trojan-activity; priority:1; metadata: jarvis_guard yes, tag attack-tool; sid:9900095; rev:2;)
-alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"JG C2: User-Agent nikto detectado"; flow:to_server,established; http.user_agent; content:"Nikto"; nocase; classtype:trojan-activity; priority:1; metadata: jarvis_guard yes, tag attack-tool; sid:9900097; rev:1;)
-alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"JG C2: User-Agent masscan detectado"; flow:to_server,established; http.user_agent; content:"masscan"; nocase; classtype:trojan-activity; priority:1; metadata: jarvis_guard yes, tag attack-tool; sid:9900098; rev:1;)
+alert tcp $HOME_NET any -> $EXTERNAL_NET any (msg:"JG EXFIL: Volume alto de dados saindo (possivel exfiltracao)"; flow:to_server,established; detection_filter:track by_src, count 500, seconds 60; classtype:misc-activity; priority:2; metadata: moonshield yes, tag exfil; sid:9900091; rev:1;)
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"JG EXFIL: Requisicao POST HTTP saindo (possivel exfiltracao)"; flow:to_server,established; http.method; content:"POST"; classtype:misc-activity; priority:2; metadata: moonshield yes, tag exfil; sid:9900092; rev:4;)
+alert dns $HOME_NET any -> $EXTERNAL_NET any (msg:"JG C2: Consulta DNS para dominio .onion via DNS (Tor)"; dns.query; content:".onion"; nocase; classtype:trojan-activity; priority:1; metadata: moonshield yes, tag tor, category c2; sid:9900093; rev:1;)
+alert tcp $HOME_NET any -> $EXTERNAL_NET [4444,5555,8888,9999,1234,6666] (msg:"JG C2: Conexao para porta C2 comum de origem interna"; flow:to_server,established; classtype:trojan-activity; priority:1; metadata: moonshield yes, category c2; sid:9900094; rev:1;)
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"JG C2: User-Agent sqlmap detectado"; flow:to_server,established; http.user_agent; content:"sqlmap"; nocase; classtype:trojan-activity; priority:1; metadata: moonshield yes, tag attack-tool; sid:9900095; rev:2;)
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"JG C2: User-Agent nikto detectado"; flow:to_server,established; http.user_agent; content:"Nikto"; nocase; classtype:trojan-activity; priority:1; metadata: moonshield yes, tag attack-tool; sid:9900097; rev:1;)
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"JG C2: User-Agent masscan detectado"; flow:to_server,established; http.user_agent; content:"masscan"; nocase; classtype:trojan-activity; priority:1; metadata: moonshield yes, tag attack-tool; sid:9900098; rev:1;)
 
 # 9900096–9900100 reservados para expansão
 # 9900101–9900120 reservados para regras de ambiente específico
+

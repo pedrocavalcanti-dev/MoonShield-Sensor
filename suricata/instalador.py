@@ -1,5 +1,5 @@
-"""
-suricata/instalador.py  —  Jarvis Guard Sensor v2.0
+﻿"""
+suricata/instalador.py  —  MOONSHIELD Sensor v2.0
 Instalador e configurador do Suricata.
 Deve ser executado como root no Linux (gateway).
 
@@ -35,9 +35,9 @@ YAML_CANDIDATOS = [
     Path("/etc/suricata/suricata.yaml"),
     Path("/usr/local/etc/suricata/suricata.yaml"),
 ]
-REGRAS_DEST_DIR = Path("/var/lib/suricata/rules/jarvis-guard")
-REGRAS_DEST     = REGRAS_DEST_DIR / "jg.rules"
-REGRAS_ORIGEM   = _AQUI / "regras_jg.rules"
+REGRAS_DEST_DIR = Path("/var/lib/suricata/rules/moonshield")
+REGRAS_DEST     = REGRAS_DEST_DIR / "ms.rules"
+REGRAS_ORIGEM   = _AQUI / "regras_ms.rules"
 EVE_JSON        = Path("/var/log/suricata/eve.json")
 
 IFACES_IGNORADAS   = {"lo", "docker0", "podman0", "virbr0"}
@@ -87,7 +87,7 @@ def executar_instalacao(cfg: dict) -> dict:
 
     separador()
 
-    if not _copiar_regras_jg():
+    if not _copiar_regras_ms():
         aguardar_enter()
         return cfg
 
@@ -557,21 +557,21 @@ def _listar_interfaces_com_ip() -> list:
 # 6 — REGRAS JG
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _copiar_regras_jg() -> bool:
+def _copiar_regras_ms() -> bool:
     if not REGRAS_ORIGEM.exists():
         print_resultado(False, f"Regras não encontradas: {REGRAS_ORIGEM}")
         return False
     try:
-        # Destino 1: /var/lib/suricata/rules/jarvis-guard/
+        # Destino 1: /var/lib/suricata/rules/moonshield/
         REGRAS_DEST_DIR.mkdir(parents=True, exist_ok=True)
         shutil.copy2(REGRAS_ORIGEM, REGRAS_DEST)
         print_resultado(True, f"Regras JG copiadas → {REGRAS_DEST}")
 
-        # Destino 2: /etc/suricata/rules/jarvis-guard/  (onde o Suricata realmente lê)
-        etc_dest_dir = Path("/etc/suricata/rules/jarvis-guard")
+        # Destino 2: /etc/suricata/rules/moonshield/  (onde o Suricata realmente lê)
+        etc_dest_dir = Path("/etc/suricata/rules/moonshield")
         etc_dest_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(REGRAS_ORIGEM, etc_dest_dir / "jg.rules")
-        print_resultado(True, f"Regras JG copiadas → {etc_dest_dir / 'jg.rules'}")
+        shutil.copy2(REGRAS_ORIGEM, etc_dest_dir / "ms.rules")
+        print_resultado(True, f"Regras JG copiadas → {etc_dest_dir / 'ms.rules'}")
 
         return True
     except Exception as e:
@@ -653,8 +653,8 @@ def _patch_home_net(conteudo: str, home_net: list) -> str:
 
 
 def _patch_rule_files(conteudo: str) -> str:
-    MARCADOR = "jarvis-guard/jg.rules"
-    ENTRADA  = "  - jarvis-guard/jg.rules"
+    MARCADOR = "moonshield/ms.rules"
+    ENTRADA  = "  - moonshield/ms.rules"
 
     if MARCADOR in conteudo:
         return conteudo
@@ -680,7 +680,7 @@ def _patch_eve_log(conteudo: str) -> str:
         return conteudo
 
     EVE_BLOCK = (
-        "\n  # == Jarvis Guard: eve-log ==\n"
+        "\n  # == MOONSHIELD: eve-log ==\n"
         "  - eve-log:\n"
         "      enabled: yes\n"
         "      filetype: regular\n"
@@ -718,7 +718,7 @@ def _sanitizar_e_patch_af_packet(conteudo: str, interfaces: list) -> str:
     LAN = cluster-id 99, demais incrementam (100, 101...).
     Remove eth0/eth1/default/placeholders originais.
     """
-    linhas_bloco = ["af-packet:", "  # == Jarvis Guard =="]
+    linhas_bloco = ["af-packet:", "  # == MOONSHIELD =="]
 
     for i, iface in enumerate(interfaces):
         linhas_bloco += [

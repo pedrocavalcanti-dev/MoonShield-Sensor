@@ -1,6 +1,6 @@
-"""
+﻿"""
 suricata/diagnostico.py
-Doctor do Jarvis Guard Sensor — verifica toda a stack do Suricata.
+Doctor do MOONSHIELD Sensor — verifica toda a stack do Suricata.
 Usa informações de topologia salvas no config.json quando disponíveis.
 Não depende de libs externas além de stdlib + ipaddress.
 """
@@ -20,7 +20,7 @@ YAML_CANDIDATOS = [
     Path("/etc/suricata/suricata.yaml"),
     Path("/usr/local/etc/suricata/suricata.yaml"),
 ]
-REGRAS_DEST = Path("/var/lib/suricata/rules/jarvis-guard/jg.rules")
+REGRAS_DEST = Path("/var/lib/suricata/rules/moonshield/ms.rules")
 EVE_JSON    = Path("/var/log/suricata/eve.json")
 
 # ── Imports visuais ───────────────────────────────────────────────────────────
@@ -54,7 +54,7 @@ def executar_diagnostico(cfg: dict) -> dict:
     resultados.append(_check_yaml(yaml_path))
     resultados.append(_check_suricata_t(yaml_path))
     resultados.append(_check_home_net(yaml_path, cfg))
-    resultados.append(_check_regras_jg())
+    resultados.append(_check_regras_ms())
     resultados.append(_check_yaml_referencia_jg(yaml_path))
 
     # ── Serviço ───────────────────────────────────────────────────────────────
@@ -212,12 +212,12 @@ def _check_home_net(yaml_path: Path | None, cfg: dict) -> dict:
     )
 
 
-def _check_regras_jg() -> dict:
+def _check_regras_ms() -> dict:
     if REGRAS_DEST.exists():
         tam = REGRAS_DEST.stat().st_size
-        return _item("regras_jg", True, "Regras JG instaladas", f"{REGRAS_DEST} ({tam:,} bytes)")
+        return _item("regras_ms", True, "Regras JG instaladas", f"{REGRAS_DEST} ({tam:,} bytes)")
     return _item(
-        "regras_jg", False, "Regras JG instaladas",
+        "regras_ms", False, "Regras JG instaladas",
         f"não encontrado: {REGRAS_DEST}",
         "Use [0] Instalar/Configurar Suricata para copiar as regras",
     )
@@ -225,16 +225,16 @@ def _check_regras_jg() -> dict:
 
 def _check_yaml_referencia_jg(yaml_path: Path | None) -> dict:
     if yaml_path is None:
-        return _item("yaml_ref_jg", False, "suricata.yaml referencia jg.rules", "yaml ausente — pulado")
+        return _item("yaml_ref_jg", False, "suricata.yaml referencia ms.rules", "yaml ausente — pulado")
     try:
         conteudo = yaml_path.read_text(encoding="utf-8", errors="ignore")
     except Exception as e:
-        return _item("yaml_ref_jg", False, "suricata.yaml referencia jg.rules", str(e))
+        return _item("yaml_ref_jg", False, "suricata.yaml referencia ms.rules", str(e))
 
-    if "jarvis-guard/jg.rules" in conteudo:
-        return _item("yaml_ref_jg", True, "suricata.yaml referencia jg.rules", "entrada encontrada")
+    if "moonshield/ms.rules" in conteudo:
+        return _item("yaml_ref_jg", True, "suricata.yaml referencia ms.rules", "entrada encontrada")
     return _item(
-        "yaml_ref_jg", False, "suricata.yaml referencia jg.rules",
+        "yaml_ref_jg", False, "suricata.yaml referencia ms.rules",
         "entrada ausente em rule-files",
         "Use [0] Instalar/Configurar Suricata para aplicar o patch",
     )
@@ -358,16 +358,16 @@ def _check_bypass_dns_config(yaml_path: Path | None, cfg: dict) -> dict:
     except Exception:
         return _item("bypass_dns", False, "Regra bypass DNS no yaml", "erro ao ler yaml")
 
-    # Simplesmente verifica se a seção de regras está referenciando jg.rules
-    if "jarvis-guard/jg.rules" in conteudo:
+    # Simplesmente verifica se a seção de regras está referenciando ms.rules
+    if "moonshield/ms.rules" in conteudo:
         return _item(
             "bypass_dns", True, "Regra bypass DNS ativa",
-            "jg.rules carregado (inclui SIDs 9900023-9900025)",
+            "ms.rules carregado (inclui SIDs 9900023-9900025)",
         )
 
     return _item(
         "bypass_dns", False, "Regra bypass DNS ativa",
-        "jg.rules não referenciado no yaml",
+        "ms.rules não referenciado no yaml",
         "Use [0] Instalar/Configurar Suricata para aplicar o patch",
     )
 
@@ -383,7 +383,7 @@ def _exibir_resultados(resultados: list):
     grupos = {
         "Sistema":       ["linux", "root"],
         "Suricata":      ["suricata_bin", "yaml", "suricata_t"],
-        "Configuração":  ["home_net", "regras_jg", "yaml_ref_jg"],
+        "Configuração":  ["home_net", "regras_ms", "yaml_ref_jg"],
         "Serviço":       ["servico", "iface_captura"],
         "Logs":          ["eve_existe", "eve_atualiza", "eve_perm"],
         "Topologia":     ["dns_interno", "bypass_dns"],

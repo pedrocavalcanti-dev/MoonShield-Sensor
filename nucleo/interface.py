@@ -1,4 +1,4 @@
-import os
+﻿import os
 import sys
 import time
 import threading
@@ -154,14 +154,14 @@ _BANNER = r"""
  ╚════╝  ╚═════╝     ╚══════╝╚══════╝╚═╝  ╚══╝╚══════╝"""
 
 _BOOT_LINES = [
-    ("JARVIS GUARD SENSOR v{ver}",               C_TITULO,  0.04),
+    ("MOONSHIELD SENSOR v{ver}",               C_TITULO,  0.04),
     ("Inicializando modulos...",                  C_DIM,     0.03),
     ("[OK] nucleo.configuracao        carregado", C_NEON,    0.02),
     ("[OK] nucleo.monitoramento       standby",   C_NEON,    0.02),
     ("[OK] suricata.diagnostico       pronto",    C_NEON,    0.02),
     ("[OK] suricata.instalador        pronto",    C_NEON,    0.02),
     ("Verificando eve.json...",                   C_DIM,     0.03),
-    ("Conectando ao Jarvis Guard...",             C_DIM,     0.05),
+    ("Conectando ao MOONSHIELD...",             C_DIM,     0.05),
 ]
 
 def boot_sequence(cfg: dict):
@@ -246,7 +246,7 @@ def _fazer_login(jarvis_url: str, usuario: str, senha: str) -> tuple[bool, str]:
             return True, ""
         return False, f"Login falhou (HTTP {r2.status_code})."
     except requests.exceptions.ConnectionError:
-        return False, "Nao foi possivel conectar ao Jarvis Guard."
+        return False, "Nao foi possivel conectar ao MOONSHIELD."
     except Exception as e:
         return False, f"Erro ao fazer login: {e}"
 
@@ -271,7 +271,7 @@ def cabecalho(cfg: dict, verificar_conexao: bool = False):
     tem_senha = bool(cfg.get("jarvis_senha"))
 
     topo()
-    linha_texto("JARVIS GUARD  .  SENSOR AGENT", C_TITULO, "centro")
+    linha_texto("MOONSHIELD  .  SENSOR AGENT", C_TITULO, "centro")
     linha_texto(f"v{VERSION}  -  github.com/pedrocavalcanti-dev", C_DIM, "centro")
     separador()
     linha_texto(f"  Status   {status_str}", status_cor)
@@ -291,7 +291,7 @@ def cabecalho(cfg: dict, verificar_conexao: bool = False):
 def wizard(cfg: dict) -> dict:
     limpar()
     topo()
-    linha_texto("JARVIS GUARD --- SETUP INICIAL", C_TITULO, "centro")
+    linha_texto("MOONSHIELD --- SETUP INICIAL", C_TITULO, "centro")
     linha_texto("Primeira execucao detectada!", C_AVISO, "centro")
     separador()
     linha_vazia()
@@ -300,12 +300,12 @@ def wizard(cfg: dict) -> dict:
 
     # ── PASSO 1 — URL ────────────────────────────────────────────────────────
     separador_fino()
-    linha_texto("  PASSO 1 / 4  -  URL do Jarvis Guard", C_WHITE)
+    linha_texto("  PASSO 1 / 4  -  URL do MOONSHIELD", C_WHITE)
     linha_texto("  Ex: http://192.168.0.105:8000", C_DIM)
     linha_vazia()
 
     while True:
-        url = input_campo("URL do Jarvis Guard")
+        url = input_campo("URL do MOONSHIELD")
         if not url:
             print_resultado(False, "URL obrigatoria.")
             continue
@@ -329,7 +329,7 @@ def wizard(cfg: dict) -> dict:
 
     # ── PASSO 2 — Login ──────────────────────────────────────────────────────
     separador_fino()
-    linha_texto("  PASSO 2 / 4  -  Login no Jarvis Guard", C_WHITE)
+    linha_texto("  PASSO 2 / 4  -  Login no MOONSHIELD", C_WHITE)
     linha_vazia()
     linha_texto("  Use o mesmo usuario e senha do painel web.", C_DIM)
     linha_vazia()
@@ -469,7 +469,7 @@ def menu_principal(cfg: dict):
             cfg = tela_diagnostico(cfg)
         elif opcao == "Q":
             limpar()
-            print(C_DIM + "\n  Jarvis Guard Sensor encerrado.\n")
+            print(C_DIM + "\n  MOONSHIELD Sensor encerrado.\n")
             sys.exit(0)
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -478,10 +478,10 @@ def menu_principal(cfg: dict):
 
 def tela_config_ip(cfg: dict) -> dict:
     cabecalho(cfg)
-    linha_texto("  CONFIGURAR URL DO JARVIS GUARD", C_TITULO)
+    linha_texto("  CONFIGURAR URL DO MOONSHIELD", C_TITULO)
     linha_texto("  Ex: http://192.168.0.105:8000", C_DIM)
     linha_vazia()
-    url = input_campo("Nova URL do Jarvis Guard", cfg["jarvis_url"])
+    url = input_campo("Nova URL do MOONSHIELD", cfg["jarvis_url"])
     if url:
         if not url.startswith("http"):
             url = "http://" + url
@@ -544,7 +544,7 @@ def tela_config_eve(cfg: dict) -> dict:
 
 def tela_testar_conexao(cfg: dict):
     cabecalho(cfg)
-    linha_texto("  TESTAR CONEXAO COM JARVIS GUARD", C_TITULO)
+    linha_texto("  TESTAR CONEXAO COM MOONSHIELD", C_TITULO)
     linha_vazia()
 
     if not cfg["jarvis_url"]:
@@ -628,7 +628,7 @@ def tela_ver_config(cfg: dict):
 
 def tela_config_credenciais(cfg: dict) -> dict:
     cabecalho(cfg)
-    linha_texto("  CREDENCIAIS DO JARVIS GUARD", C_TITULO)
+    linha_texto("  CREDENCIAIS DO MOONSHIELD", C_TITULO)
     linha_vazia()
     linha_texto("  Use o mesmo usuario e senha do painel web.", C_DIM)
     linha_texto("  Credenciais salvas em config.json.", C_DIM)

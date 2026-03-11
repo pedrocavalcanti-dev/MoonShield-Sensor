@@ -1,4 +1,4 @@
-import os
+﻿import os
 import time
 import json
 import threading
@@ -34,7 +34,7 @@ _session_lock = threading.Lock()
 
 def _autenticar(cfg: dict) -> bool:
     """
-    Faz login no Jarvis Guard e armazena os cookies na _session global.
+    Faz login no MOONSHIELD e armazena os cookies na _session global.
     Retorna True se autenticado com sucesso.
 
     O sensor precisa de sessão autenticada porque api/data/ usa @login_required.
@@ -181,7 +181,7 @@ def _loop_display(cfg: dict):
 
         limpar()
         topo()
-        linha_texto("JARVIS GUARD — SENSOR  ATIVO", C_TITULO, "centro")
+        linha_texto("MOONSHIELD — SENSOR  ATIVO", C_TITULO, "centro")
         separador()
         linha_texto(f"Jarvis  : {cfg['jarvis_url']}", C_DIM)
         linha_texto(f"Sensor  : {cfg['sensor_nome']}", C_DIM)
@@ -315,7 +315,7 @@ def _loop_sensor(cfg: dict):
 
 def _enviar(url: str, sensor_nome: str, buffer: list, cfg: dict) -> bool:
     """
-    Envia eventos para o Jarvis Guard.
+    Envia eventos para o MOONSHIELD.
     Usa a _session global (que mantém cookies de autenticação).
     Se receber 401/403, tenta reautenticar uma vez.
     """
