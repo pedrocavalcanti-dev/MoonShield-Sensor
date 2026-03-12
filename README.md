@@ -21,6 +21,7 @@ O **MoonShield Sensor** é o agente que roda na máquina Linux com Suricata (ger
 
 Na **v2.0** ele ganhou:
 - Instalador completo do Suricata com detecção automática de topologia de rede
+- Configuração explícita de **WAN / LAN / MGMT** — cada interface com papel definido
 - Regras próprias (**MoonShield Ruleset**)
 - Autenticação por usuário/senha com sessão persistente
 - Diagnóstico integrado com **15 checks automáticos**
@@ -41,12 +42,14 @@ Suricata → /var/log/suricata/eve.json
 |---|----------|
 | 🔐 | **Autenticação por usuário/senha** — sessão HTTP persistente com cookies, renovada automaticamente a cada hora. Credenciais salvas no `config.json` |
 | ⚙️ | **Gerenciamento de credenciais no menu** — opção `[8]` permite ver, atualizar e testar usuário/senha sem rodar o wizard novamente |
-| 🛠️ | **Instalador automático do Suricata** — detecta WAN/LAN, redes (`HOME_NET`), DNS interno e aplica patches no `suricata.yaml` automaticamente |
+| 🛠️ | **Instalador automático do Suricata** — detecta WAN/LAN/MGMT, `HOME_NET` e DNS interno. Aplica patches no `suricata.yaml` automaticamente |
+| 🌐 | **WAN / LAN / MGMT explícitos** — cada interface tem papel definido. O sensor monitora **apenas as interfaces selecionadas**, nunca captura tudo que está UP |
+| 🔑 | **Header `X-MS-TOKEN` padronizado** — token de autenticação enviado em header dedicado em todas as requisições ao MoonShield |
 | 📋 | **Regras Emerging Threats (ET Open)** — ~40.000 assinaturas (malware, C2, exploits, botnets) via `suricata-update` |
 | 🛡️ | **MoonShield Ruleset v1** — 50 regras customizadas (SIDs `9900001–9900050`) em 7 grupos |
 | 🩺 | **Diagnóstico integrado** — 15 checks automáticos para toda a stack |
 | 🧩 | **Estrutura modular** — separado em `nucleo/` e `suricata/` para fácil manutenção |
-| 💾 | **Topologia salva no config.json** — interface, WAN, HOME_NET e DNS persistem entre sessões |
+| 💾 | **Topologia salva no config.json** — WAN, LAN, MGMT, HOME_NET e DNS persistem entre sessões |
 
 ---
 
@@ -174,7 +177,7 @@ sudo venv/bin/python3 ms_sensor.py
 ╠══════════════════════════════════════════════════════╣
 ║  [0] Instalar / Configurar Suricata                  ║
 ║  [1] Iniciar sensor                                  ║
-║  [2] Configurar IP do MoonShield                     ║
+║  [2] Configurar URL do MoonShield                    ║
 ║  [3] Configurar nome do sensor                       ║
 ║  [4] Configurar severidade mínima                    ║
 ║  [5] Configurar caminho do eve.json                  ║
@@ -205,6 +208,7 @@ O sensor autentica no MoonShield usando sessão HTTP com cookies (mesmo mecanism
 **Durante o monitoramento:**
 - Sessão renovada automaticamente a cada 1 hora
 - Se receber HTTP 401/403, tenta reautenticar antes de desistir
+- Token enviado via header `X-MS-TOKEN` em todas as requisições
 - Status de login exibido em tempo real na tela do sensor
 
 ---
@@ -217,37 +221,37 @@ Ao entrar em **[0] Instalar / Configurar Suricata**, o instalador executa automa
 2. Instala o Suricata via `apt` / `dnf` / `yum` / `pacman` (se não estiver instalado)
 3. Baixa regras Emerging Threats Open via `suricata-update` (~40.000 assinaturas, gratuitas)
 4. Localiza o `suricata.yaml` nos caminhos padrão — ou pergunta
-5. **Detecta a topologia da rede automaticamente:**
-   - Interface WAN pelo `ip route show default`
-   - Interfaces com IP via `ip -o -4 addr show` (ignora `lo`, `docker0`, `veth*`, `tun*`, `wg*` etc.)
-   - HOME_NET: CIDRs de todas as interfaces internas
-   - DNS interno: lê `/etc/resolv.conf`, verifica se algum nameserver está na subnet LAN
-6. **Exibe a topologia detectada e pede confirmação em 4 passos:**
-   - Passo 1: confirmar interface WAN
-   - Passo 2: confirmar interface LAN (captura do Suricata)
-   - Passo 3: confirmar HOME_NET (CIDRs, separados por vírgula)
-   - Passo 4: confirmar DNS interno / AdGuard
-7. Copia as regras MS para `/var/lib/suricata/rules/moonshield/ms.rules`
-8. Faz backup do `suricata.yaml` → `suricata.yaml.ms.bak`
-9. **Aplica 4 patches no `suricata.yaml`:**
-   - `HOME_NET` com os CIDRs informados
-   - `rule-files` com a entrada `moonshield/ms.rules`
-   - `eve-log` habilitado com `alert`, `dns`, `http`, `tls` em `/var/log/suricata/eve.json`
-   - `af-packet` com a interface LAN de captura
-10. Valida com `suricata -T` — restaura o backup automaticamente se falhar
-11. Habilita e reinicia via `systemctl enable --now suricata`
-12. Verifica se o `eve.json` foi criado
+5. **Detecta e exibe todas as interfaces com IP** (ignora `lo`, `docker0`, `veth*`, `tun*`, `wg*` etc.) com CIDR, estado e pacotes RX para facilitar a identificação
+6. **Coleta a topologia em 5 passos explícitos:**
+   - **Passo 1 — WAN:** interface de saída para internet. Detectada automaticamente por `ip route show default`. Não entra no HOME_NET, não é monitorada pelo padrão
+   - **Passo 2 — LAN:** rede interna principal. CIDR vira o HOME_NET base
+   - **Passo 3 — MGMT** *(opcional):* interface de gerência (SSH/admin). Totalmente excluída do monitoramento e do HOME_NET
+   - **Passo 4 — Modo de captura:** `Só LAN` / `LAN+WAN` / `Personalizado` — você decide exatamente o que o Suricata vai ouvir
+   - **Passo 5 — HOME_NET adicional:** redes extras das interfaces monitoradas podem ser incluídas nas regras
+7. Exibe resumo completo e pede confirmação antes de aplicar qualquer mudança
+8. Copia as regras MS para `/var/lib/suricata/rules/moonshield/ms.rules`
+9. Faz backup do `suricata.yaml` → `suricata.yaml.ms.bak`
+10. **Aplica 4 patches no `suricata.yaml`:**
+    - `HOME_NET` com os CIDRs selecionados
+    - `rule-files` com a entrada `moonshield/ms.rules`
+    - `eve-log` habilitado com `alert`, `dns`, `http`, `tls` em `/var/log/suricata/eve.json`
+    - `af-packet` **reescrito** apenas com as interfaces selecionadas (cluster-id 99+)
+11. Valida com `suricata -T` — restaura o backup automaticamente se falhar
+12. Habilita e reinicia via `systemctl enable --now suricata`
+13. Verifica se o `eve.json` foi criado
 
 **Ao final, a topologia completa é salva no `config.json`:**
 
 ```json
 {
-  "interface_captura": "enp0s8",
-  "interface_wan":     "enp0s3",
-  "home_net":          ["192.168.10.0/24", "10.0.0.0/8"],
-  "dns_interno":       "192.168.10.1",
-  "suricata_yaml":     "/etc/suricata/suricata.yaml",
-  "eve_path":          "/var/log/suricata/eve.json"
+  "interface_lan":          "enp0s8",
+  "interface_wan":          "enp0s3",
+  "interface_mgmt":         "enp0s9",
+  "interfaces_monitoradas": ["enp0s8"],
+  "home_net":               ["192.168.10.0/24"],
+  "dns_interno":            "192.168.10.1",
+  "suricata_yaml":          "/etc/suricata/suricata.yaml",
+  "eve_path":               "/var/log/suricata/eve.json"
 }
 ```
 
