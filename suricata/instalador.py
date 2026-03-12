@@ -9,9 +9,9 @@ Fluxo:
   2b Baixar regras ET Open via suricata-update
   3  Localizar suricata.yaml
   4  Listar interfaces:
-       → Usuário escolhe qual é a LAN principal (define HOME_NET base)
+       → Usuário escolhe WAN, LAN e opcionalmente MGMT
+       → Usuário escolhe modo de captura (só LAN / LAN+WAN / personalizado)
        → Pergunta se quer adicionar outras redes ao HOME_NET
-       → Todas as interfaces UP são monitoradas no af-packet
   5  Confirmar com resumo completo
   6  Copiar regras MS
   7  Backup do suricata.yaml
@@ -81,7 +81,7 @@ def executar_instalacao(cfg: dict) -> dict:
 
     topo = _escolher_interface()
     if topo is None:
-        print_resultado(False, "Nenhuma interface selecionada. Abortando.")
+        print_resultado(False, "Configuração de interfaces cancelada. Abortando.")
         aguardar_enter()
         return cfg
 
@@ -127,13 +127,17 @@ def executar_instalacao(cfg: dict) -> dict:
     else:
         print_resultado(False, msg_eve)
 
+    # ── Salva topologia completa no config ────────────────────────────────────
     cfg["suricata_yaml"]          = str(yaml_path)
-    cfg["interface_captura"]      = topo["iface_lan"]
-    cfg["interface_wan"]          = topo.get("iface_wan", "")
-    cfg["interfaces_monitoradas"] = topo.get("todas_monitoradas", [topo["iface_lan"]])
+    cfg["interface_lan"]          = topo["iface_lan"]
+    cfg["interface_wan"]          = topo["iface_wan"]
+    cfg["interface_mgmt"]         = topo.get("iface_mgmt", "")
+    cfg["interface_captura"]      = topo["iface_lan"]   # compatibilidade diagnóstico
+    cfg["interfaces_monitoradas"] = topo["interfaces_monitoradas"]
     cfg["home_net"]               = topo["home_net"]
     cfg["dns_interno"]            = topo.get("dns_interno", "")
     cfg["eve_path"]               = str(EVE_JSON)
+    cfg["suricata_ok"]            = True
 
     from nucleo.configuracao import salvar_config
     salvar_config(cfg)
@@ -287,131 +291,265 @@ def _localizar_suricata_yaml() -> Path | None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 4 — ESCOLHER INTERFACES + HOME_NET MULTI-REDE
+# 4 — ESCOLHER INTERFACES  (WAN / LAN / MGMT / MODO DE CAPTURA)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _escolher_interface() -> dict | None:
     """
-    1. Lista todas as interfaces disponíveis
-    2. Usuário escolhe qual é a LAN principal
-    3. Pergunta se quer adicionar outras redes ao HOME_NET
-       (ex: rede Senac, rede de gestão, etc)
-    4. Todas as interfaces UP são adicionadas ao af-packet automaticamente
+    Fluxo explícito de configuração de interfaces:
+
+    1. Exibe tabela de interfaces disponíveis
+    2. Usuário escolhe a WAN  (saída para internet)
+    3. Usuário escolhe a LAN  (rede interna principal → HOME_NET base)
+    4. Se sobrar interface, pergunta se é MGMT ou outra rede a monitorar
+    5. Escolha do modo de captura: só LAN / LAN+WAN / personalizado
+    6. Pergunta se quer adicionar redes extras ao HOME_NET
+    7. Exibe resumo e pede confirmação
     """
-    ifaces    = _listar_interfaces_com_ip_e_rx()
-    iface_wan = _detectar_wan()
+    ifaces = _listar_interfaces_com_ip_e_rx()
 
     if not ifaces:
         print_resultado(False, "Nenhuma interface com IP encontrada.")
         return None
 
+    wan_sugerida = _detectar_wan()
+
     # ── Exibe tabela ──────────────────────────────────────────────────────────
-    _exibir_tabela_interfaces(ifaces, iface_wan)
+    _exibir_tabela_interfaces(ifaces, wan_sugerida)
 
-    # ── Sugere LAN como a interface com mais RX que não seja WAN ─────────────
-    candidatos = [f for f in ifaces if f["nome"] != iface_wan and f["estado"] == "up"]
-    sugest = str(ifaces.index(max(candidatos, key=lambda f: f["rx_pkts"])) + 1) if candidatos else "1"
-
-    # ── Pergunta 1: qual é a LAN ──────────────────────────────────────────────
-    linha_texto("  Escolha qual interface é a sua LAN (rede interna principal).", C_AVISO)
-    linha_texto("  Ela define o HOME_NET base e é onde estão seus dispositivos.", C_DIM)
+    # ── PASSO 1 — Escolher WAN ────────────────────────────────────────────────
+    separador()
+    linha_texto("PASSO 1 — INTERFACE WAN", C_DESTAQUE)
+    linha_vazia()
+    linha_texto("  A WAN é a interface conectada à internet (ou à rede externa).", C_DIM)
+    linha_texto("  Ela NÃO entra no HOME_NET.", C_DIM)
     linha_vazia()
 
+    idx_wan_sug = next(
+        (str(i + 1) for i, f in enumerate(ifaces) if f["nome"] == wan_sugerida), "1"
+    )
+
     while True:
-        resp = input_campo("Qual é a LAN? (número)", sugest).strip()
+        resp = input_campo("Qual é a WAN? (número)", idx_wan_sug).strip()
         if not resp.isdigit():
             linha_texto("  Digite apenas o número.", C_AVISO)
             continue
         idx = int(resp) - 1
         if 0 <= idx < len(ifaces):
-            iface_lan = ifaces[idx]
+            iface_wan = ifaces[idx]
             break
         linha_texto(f"  Número inválido (1–{len(ifaces)}).", C_AVISO)
 
-    # ── HOME_NET começa com a rede da LAN ─────────────────────────────────────
+    print_resultado(True, f"WAN: {iface_wan['nome']}  ({iface_wan['cidr']})")
+
+    # ── PASSO 2 — Escolher LAN ────────────────────────────────────────────────
+    separador()
+    linha_texto("PASSO 2 — INTERFACE LAN", C_DESTAQUE)
+    linha_vazia()
+    linha_texto("  A LAN é a rede interna principal que você quer proteger.", C_DIM)
+    linha_texto("  O CIDR dela vira o HOME_NET base.", C_DIM)
+    linha_vazia()
+
+    ifaces_sem_wan = [f for f in ifaces if f["nome"] != iface_wan["nome"]]
+
+    if not ifaces_sem_wan:
+        print_resultado(False, "Só há uma interface além da WAN. Impossível continuar.")
+        return None
+
+    # Re-exibe só as restantes para facilitar
+    _exibir_tabela_interfaces(ifaces_sem_wan, "")
+
+    # Sugere a interface com mais RX que não seja WAN
+    candidatos = [f for f in ifaces_sem_wan if f["estado"] == "up"]
+    idx_lan_sug = "1"
+    if candidatos:
+        melhor = max(candidatos, key=lambda f: f["rx_pkts"])
+        idx_lan_sug = str(ifaces_sem_wan.index(melhor) + 1)
+
+    while True:
+        resp = input_campo("Qual é a LAN? (número)", idx_lan_sug).strip()
+        if not resp.isdigit():
+            linha_texto("  Digite apenas o número.", C_AVISO)
+            continue
+        idx = int(resp) - 1
+        if 0 <= idx < len(ifaces_sem_wan):
+            iface_lan = ifaces_sem_wan[idx]
+            break
+        linha_texto(f"  Número inválido (1–{len(ifaces_sem_wan)}).", C_AVISO)
+
+    print_resultado(True, f"LAN: {iface_lan['nome']}  ({iface_lan['cidr']})")
+
+    # HOME_NET começa com a rede da LAN
     home_net = [str(ipaddress.IPv4Network(iface_lan["cidr"], strict=False))]
 
-    # ── Pergunta 2: outras redes para o HOME_NET ──────────────────────────────
-    outras_ifaces = [f for f in ifaces if f["nome"] != iface_lan["nome"]]
+    # ── PASSO 3 — MGMT (opcional, só se sobrar interface) ─────────────────────
+    iface_mgmt = None
+    ifaces_restantes = [
+        f for f in ifaces
+        if f["nome"] not in (iface_wan["nome"], iface_lan["nome"])
+    ]
 
-    if outras_ifaces:
-        linha_vazia()
+    if ifaces_restantes:
         separador()
-        linha_texto("HOME_NET ADICIONAL", C_DESTAQUE)
+        linha_texto("PASSO 3 — INTERFACE DE GERÊNCIA (MGMT)", C_DESTAQUE)
         linha_vazia()
-        linha_texto("  Ataques vindos de outras redes (ex: rede Senac, rede de gestão)", C_DIM)
-        linha_texto("  só serão detectados se essas redes estiverem no HOME_NET.", C_DIM)
-        linha_vazia()
-        linha_texto("  Interfaces disponíveis para adicionar ao HOME_NET:", C_AVISO)
+        linha_texto("  Interface de gerência é usada só para administrar o servidor", C_DIM)
+        linha_texto("  (SSH, PuTTY). Ela NÃO é monitorada e NÃO entra no HOME_NET.", C_DIM)
         linha_vazia()
 
-        for i, f in enumerate(outras_ifaces, start=1):
-            rede = str(ipaddress.IPv4Network(f["cidr"], strict=False))
-            tag  = "← WAN" if f["nome"] == iface_wan else ""
-            print(
-                "\033[36m║\033[0m  "
-                + C_DIM
-                + f"  {i}. {f['nome']:<12} {f['cidr']:<20} ({rede}) {tag}"
-                + "\033[0m"
-            )
+        _exibir_tabela_interfaces(ifaces_restantes, "")
 
-        linha_vazia()
-        linha_texto("  Digite os números separados por vírgula, ou Enter para pular.", C_DIM)
-        linha_texto("  Exemplo: 1,2  (adiciona as duas primeiras)", C_DIM)
+        linha_texto("  Se não tiver interface de gerência, pressione Enter para pular.", C_DIM)
         linha_vazia()
 
-        resp2 = input_campo("Quais redes adicionar ao HOME_NET?", "").strip()
+        resp = input_campo("Qual é a MGMT? (número ou Enter para pular)", "").strip()
 
-        if resp2:
-            for parte in resp2.split(","):
+        if resp and resp.isdigit():
+            idx = int(resp) - 1
+            if 0 <= idx < len(ifaces_restantes):
+                iface_mgmt = ifaces_restantes[idx]
+                print_resultado(True, f"MGMT: {iface_mgmt['nome']}  ({iface_mgmt['cidr']})")
+            else:
+                linha_texto("  Número inválido — pulando MGMT.", C_AVISO)
+        else:
+            linha_texto("  Sem interface de gerência configurada.", C_DIM)
+
+    # ── PASSO 4 — Modo de captura ─────────────────────────────────────────────
+    separador()
+    linha_texto("PASSO 4 — MODO DE CAPTURA", C_DESTAQUE)
+    linha_vazia()
+    linha_texto("  Quais interfaces o Suricata vai monitorar?", C_DIM)
+    linha_vazia()
+    linha_texto(f"  [1]  Só LAN           ({iface_lan['nome']})", C_NORMAL)
+    linha_texto(f"  [2]  LAN + WAN        ({iface_lan['nome']} + {iface_wan['nome']})", C_NORMAL)
+    linha_texto(f"  [3]  Personalizado    (você escolhe)", C_NORMAL)
+    linha_vazia()
+
+    while True:
+        modo = input_campo("Modo de captura", "2").strip()
+        if modo in ("1", "2", "3"):
+            break
+        linha_texto("  Digite 1, 2 ou 3.", C_AVISO)
+
+    if modo == "1":
+        interfaces_monitoradas = [iface_lan["nome"]]
+
+    elif modo == "2":
+        interfaces_monitoradas = [iface_lan["nome"], iface_wan["nome"]]
+
+    else:
+        # Modo personalizado — exibe todas exceto MGMT
+        ifaces_disponiveis = [
+            f for f in ifaces
+            if iface_mgmt is None or f["nome"] != iface_mgmt["nome"]
+        ]
+        linha_vazia()
+        linha_texto("  Interfaces disponíveis para monitoramento:", C_AVISO)
+        linha_vazia()
+        _exibir_tabela_interfaces(ifaces_disponiveis, "")
+        linha_texto("  Digite os números separados por vírgula.", C_DIM)
+        linha_texto("  Exemplo: 1,2", C_DIM)
+        linha_vazia()
+
+        interfaces_monitoradas = []
+        while not interfaces_monitoradas:
+            resp = input_campo("Quais interfaces monitorar?", "").strip()
+            for parte in resp.split(","):
                 parte = parte.strip()
                 if parte.isdigit():
-                    idx2 = int(parte) - 1
-                    if 0 <= idx2 < len(outras_ifaces):
-                        rede_extra = str(ipaddress.IPv4Network(
-                            outras_ifaces[idx2]["cidr"], strict=False
-                        ))
+                    idx = int(parte) - 1
+                    if 0 <= idx < len(ifaces_disponiveis):
+                        nome = ifaces_disponiveis[idx]["nome"]
+                        if nome not in interfaces_monitoradas:
+                            interfaces_monitoradas.append(nome)
+            if not interfaces_monitoradas:
+                linha_texto("  Selecione ao menos uma interface.", C_AVISO)
+
+    linha_vazia()
+    linha_texto("  Interfaces que serão monitoradas:", C_AVISO)
+    for nome in interfaces_monitoradas:
+        info = next((f for f in ifaces if f["nome"] == nome), {})
+        linha_texto(f"    • {nome}  {info.get('cidr', '')}", C_OK)
+
+    # ── PASSO 5 — HOME_NET adicional ──────────────────────────────────────────
+    # Redes das interfaces monitoradas que ainda não estão no HOME_NET
+    redes_candidatas = []
+    for nome in interfaces_monitoradas:
+        if nome == iface_lan["nome"]:
+            continue  # já está no HOME_NET
+        info = next((f for f in ifaces if f["nome"] == nome), None)
+        if not info:
+            continue
+        rede = str(ipaddress.IPv4Network(info["cidr"], strict=False))
+        if rede not in home_net:
+            redes_candidatas.append({"nome": nome, "cidr": info["cidr"], "rede": rede})
+
+    if redes_candidatas:
+        separador()
+        linha_texto("PASSO 5 — HOME_NET ADICIONAL", C_DESTAQUE)
+        linha_vazia()
+        linha_texto("  Deseja adicionar outras redes monitoradas ao HOME_NET?", C_DIM)
+        linha_texto("  Redes no HOME_NET são tratadas como internas nas regras.", C_DIM)
+        linha_vazia()
+
+        for i, r in enumerate(redes_candidatas, start=1):
+            tag = "← WAN" if r["nome"] == iface_wan["nome"] else ""
+            linha_texto(f"  [{i}]  {r['nome']:<12} {r['cidr']:<20} {tag}", C_DIM)
+
+        linha_vazia()
+        linha_texto("  Digite os números ou Enter para pular.", C_DIM)
+        linha_vazia()
+
+        resp = input_campo("Adicionar ao HOME_NET?", "").strip()
+        if resp:
+            for parte in resp.split(","):
+                parte = parte.strip()
+                if parte.isdigit():
+                    idx = int(parte) - 1
+                    if 0 <= idx < len(redes_candidatas):
+                        rede_extra = redes_candidatas[idx]["rede"]
                         if rede_extra not in home_net:
                             home_net.append(rede_extra)
                             print_resultado(
                                 True,
-                                f"Adicionado ao HOME_NET: {rede_extra} ({outras_ifaces[idx2]['nome']})"
+                                f"Adicionado ao HOME_NET: {rede_extra} ({redes_candidatas[idx]['nome']})"
                             )
 
-    # ── Monta lista de interfaces a monitorar (todas UP) ──────────────────────
-    todas_monitoradas = [iface_lan["nome"]]
-    for f in ifaces:
-        if f["nome"] != iface_lan["nome"] and f["estado"] == "up":
-            todas_monitoradas.append(f["nome"])
-
-    dns_intern = iface_lan["ip"]
-
-    # ── Resumo final ──────────────────────────────────────────────────────────
+    # ── RESUMO FINAL ──────────────────────────────────────────────────────────
     linha_vazia()
     separador()
     linha_texto("RESUMO FINAL", C_DESTAQUE)
     linha_vazia()
-    linha_texto(f"  LAN principal  : {iface_lan['nome']}  ({iface_lan['cidr']})", C_OK)
+
+    linha_texto(f"  WAN   : {iface_wan['nome']:<12} {iface_wan['cidr']}", C_DIM)
+    linha_texto(f"  LAN   : {iface_lan['nome']:<12} {iface_lan['cidr']}", C_OK)
+
+    if iface_mgmt:
+        linha_texto(f"  MGMT  : {iface_mgmt['nome']:<12} {iface_mgmt['cidr']}  (fora do monitoramento)", C_DIM)
+    else:
+        linha_texto(f"  MGMT  : (não configurada)", C_DIM)
+
     linha_vazia()
-    linha_texto("  HOME_NET (redes protegidas):", C_AVISO)
+    linha_texto("  HOME_NET (redes protegidas pelas regras):", C_AVISO)
     for rede in home_net:
         linha_texto(f"    • {rede}", C_OK)
+
     linha_vazia()
     linha_texto("  Interfaces monitoradas pelo Suricata:", C_AVISO)
-    for nome in todas_monitoradas:
+    for nome in interfaces_monitoradas:
         info = next((f for f in ifaces if f["nome"] == nome), {})
-        tag  = ""
-        if nome == iface_wan:
-            tag = "  ← WAN (internet)"
+        tag = ""
+        if nome == iface_wan["nome"]:
+            tag = "  ← WAN"
         elif nome == iface_lan["nome"]:
-            tag = "  ← LAN principal"
-        linha_texto(f"    • {nome}  {info.get('cidr','')}{tag}", C_DIM)
+            tag = "  ← LAN"
+        linha_texto(f"    • {nome}  {info.get('cidr', '')}{tag}", C_DIM)
+
     linha_vazia()
     linha_texto("  O que vai acontecer:", C_AVISO)
     linha_texto("    • Regras MS copiadas para o sistema", C_DIM)
-    linha_texto("    • suricata.yaml reescrito com TODAS as interfaces", C_DIM)
-    linha_texto("    • HOME_NET configurado com todas as redes selecionadas", C_DIM)
-    linha_texto("    • eth0 e placeholders removidos", C_DIM)
+    linha_texto("    • suricata.yaml reescrito com as interfaces selecionadas", C_DIM)
+    linha_texto("    • HOME_NET configurado com as redes selecionadas", C_DIM)
     linha_texto("    • Configuração validada com suricata -T", C_DIM)
     linha_texto("    • Suricata reiniciado", C_DIM)
     linha_vazia()
@@ -421,17 +559,22 @@ def _escolher_interface() -> dict | None:
         return None
 
     return {
-        "iface_lan":         iface_lan["nome"],
-        "iface_wan":         iface_wan,
-        "home_net":          home_net,
-        "dns_interno":       dns_intern,
-        "todas_ifaces":      ifaces,
-        "todas_monitoradas": todas_monitoradas,
+        "iface_lan":              iface_lan["nome"],
+        "iface_wan":              iface_wan["nome"],
+        "iface_mgmt":             iface_mgmt["nome"] if iface_mgmt else "",
+        "home_net":               home_net,
+        "dns_interno":            iface_lan["ip"],
+        "todas_ifaces":           ifaces,
+        "interfaces_monitoradas": interfaces_monitoradas,
     }
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# HELPERS DE EXIBIÇÃO
+# ══════════════════════════════════════════════════════════════════════════════
+
 def _exibir_tabela_interfaces(ifaces: list, iface_wan: str):
-    linha_texto("INTERFACES DE REDE DISPONÍVEIS", C_TITULO, "centro")
+    linha_texto("INTERFACES DISPONÍVEIS", C_TITULO, "centro")
     linha_vazia()
     print("\033[36m║\033[0m  " + "-" * 62)
     print(
@@ -445,7 +588,7 @@ def _exibir_tabela_interfaces(ifaces: list, iface_wan: str):
         info   = ""
         cor    = C_NORMAL
         if iface["nome"] == iface_wan:
-            info = "← WAN (internet)"
+            info = "← WAN detectada"
             cor  = C_DIM
         elif iface["estado"] != "up":
             info = f"[{iface['estado']}]"
@@ -562,12 +705,10 @@ def _copiar_regras_ms() -> bool:
         print_resultado(False, f"Regras não encontradas: {REGRAS_ORIGEM}")
         return False
     try:
-        # Destino 1: /var/lib/suricata/rules/moonshield/
         REGRAS_DEST_DIR.mkdir(parents=True, exist_ok=True)
         shutil.copy2(REGRAS_ORIGEM, REGRAS_DEST)
         print_resultado(True, f"Regras MS copiadas → {REGRAS_DEST}")
 
-        # Destino 2: /etc/suricata/rules/moonshield/  (onde o Suricata realmente lê)
         etc_dest_dir = Path("/etc/suricata/rules/moonshield")
         etc_dest_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(REGRAS_ORIGEM, etc_dest_dir / "ms.rules")
@@ -607,7 +748,7 @@ def _aplicar_todos_patches(yaml_path: Path, topo: dict) -> bool:
     conteudo = _patch_home_net(conteudo, topo["home_net"])
     conteudo = _patch_rule_files(conteudo)
     conteudo = _patch_eve_log(conteudo)
-    conteudo = _sanitizar_e_patch_af_packet(conteudo, topo["todas_monitoradas"])
+    conteudo = _sanitizar_e_patch_af_packet(conteudo, topo["interfaces_monitoradas"])
 
     try:
         yaml_path.write_text(conteudo, encoding="utf-8")
@@ -622,7 +763,6 @@ def _patch_home_net(conteudo: str, home_net: list) -> str:
     if not home_net:
         return conteudo
 
-    # Múltiplas redes: [10.10.0.0/24,10.53.59.0/24]
     valor     = "[" + ",".join(home_net) + "]"
     nova_line = f'    HOME_NET: "{valor}"'
 
@@ -714,9 +854,9 @@ def _patch_eve_log(conteudo: str) -> str:
 
 def _sanitizar_e_patch_af_packet(conteudo: str, interfaces: list) -> str:
     """
-    Reescreve af-packet com TODAS as interfaces.
+    Reescreve af-packet apenas com as interfaces selecionadas pelo usuário.
     LAN = cluster-id 99, demais incrementam (100, 101...).
-    Remove eth0/eth1/default/placeholders originais.
+    Remove eth0/eth1/placeholders originais.
     """
     linhas_bloco = ["af-packet:", "  # == MOONSHIELD =="]
 

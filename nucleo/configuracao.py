@@ -32,13 +32,33 @@ SEVERIDADE_LABEL = {
 
 def config_padrao() -> dict:
     return {
-        "Moon_url":    "",
+        # ── Painel MoonShield ─────────────────────────────────────────────────
+        "Moon_url":      "",
+        "Moon_usuario":  "",
+        "Moon_senha":    "",
+        "token":         "",
+
+        # ── Sensor ───────────────────────────────────────────────────────────
         "sensor_nome":   socket.gethostname(),
         "min_severity":  "4",
         "batch_size":    20,
         "batch_timeout": 5,
         "eve_path":      EVE_PATH,
-        "configurado":   False,
+
+        # ── Estado ───────────────────────────────────────────────────────────
+        "configurado":   False,   # wizard inicial concluído
+        "wizard_ok":     False,   # wizard inicial concluído (alias explícito)
+        "suricata_ok":   False,   # Suricata instalado e configurado pelo instalador
+
+        # ── Topologia de rede (preenchido pelo instalador) ────────────────────
+        "interface_lan":          "",   # LAN principal — HOME_NET base
+        "interface_wan":          "",   # WAN — saída para internet
+        "interface_mgmt":         "",   # Gerência/admin — fora do monitoramento
+        "interface_captura":      "",   # alias de interface_lan (compatibilidade)
+        "interfaces_monitoradas": [],   # interfaces no af-packet do Suricata
+        "home_net":               [],   # CIDRs protegidos pelas regras
+        "dns_interno":            "",   # IP do DNS interno (padrão: IP da LAN)
+        "suricata_yaml":          "",   # caminho do suricata.yaml configurado
     }
 
 
@@ -48,10 +68,14 @@ def carregar_config() -> dict:
         try:
             with open(cfg_path, "r") as f:
                 cfg = json.load(f)
+            # Garante que todos os campos do padrão existem
             padrao = config_padrao()
             for k, v in padrao.items():
                 if k not in cfg:
                     cfg[k] = v
+            # Compatibilidade: wizard_ok espelha configurado
+            if cfg.get("configurado") and not cfg.get("wizard_ok"):
+                cfg["wizard_ok"] = True
             return cfg
         except Exception:
             pass

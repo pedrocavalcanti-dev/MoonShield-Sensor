@@ -161,7 +161,7 @@ _BOOT_LINES = [
     ("[OK] suricata.diagnostico       pronto",    C_NEON,    0.02),
     ("[OK] suricata.instalador        pronto",    C_NEON,    0.02),
     ("Verificando eve.json...",                   C_DIM,     0.03),
-    ("Conectando ao MOONSHIELD...",             C_DIM,     0.05),
+    ("Conectando ao MOONSHIELD...",               C_DIM,     0.05),
 ]
 
 def boot_sequence(cfg: dict):
@@ -275,7 +275,7 @@ def cabecalho(cfg: dict, verificar_conexao: bool = False):
     linha_texto(f"v{VERSION}  -  github.com/pedrocavalcanti-dev", C_DIM, "centro")
     separador()
     linha_texto(f"  Status   {status_str}", status_cor)
-    linha_texto(f"  Moon   {cfg['Moon_url'] or '(nao configurado)'}", C_DIM)
+    linha_texto(f"  Moon     {cfg['Moon_url'] or '(nao configurado)'}", C_DIM)
     linha_texto(f"  Sensor   {cfg['sensor_nome']}", C_WHITE)
     linha_texto(f"  Eve.json {cfg['eve_path']}", C_DIM)
     linha_texto(
@@ -392,13 +392,14 @@ def wizard(cfg: dict) -> dict:
     separador()
     linha_texto("  CONFIGURACAO CONCLUIDA", C_OK, "centro")
     linha_vazia()
-    linha_texto(f"  Moon   : {cfg['Moon_url']}", C_DIM)
+    linha_texto(f"  Moon     : {cfg['Moon_url']}", C_DIM)
     linha_texto(f"  Usuario  : {cfg.get('Moon_usuario', '---')}", C_DIM)
     linha_texto(f"  Sensor   : {cfg['sensor_nome']}", C_DIM)
     linha_texto(f"  Severity : {SEVERIDADE_LABEL[cfg['min_severity']]}", C_DIM)
     linha_vazia()
 
     cfg["configurado"] = True
+    cfg["wizard_ok"]   = True
     spinner_inline("Salvando config.json...", salvar_config, cfg)
     print_resultado(True, "config.json salvo.")
     aguardar_enter()
@@ -421,8 +422,12 @@ def menu_principal(cfg: dict):
         tem_senha     = bool(cfg.get("Moon_senha"))
         cred_label    = f"{usuario_atual}  {'[OK]' if tem_senha else '[!!] sem senha'}"
 
+        # Indicador de status do Suricata no menu
+        suricata_ok  = cfg.get("suricata_ok", False)
+        suricata_tag = f"{'[OK]' if suricata_ok else '[!!] nao configurado'}"
+
         linha_texto("  --- Operacao -----------------------------------------------", C_NEON_DIM)
-        linha_texto("  [0]  >>  Instalar / Configurar Suricata", C_MENU_TXT)
+        linha_texto(f"  [0]  >>  Instalar / Configurar Suricata  {suricata_tag}", C_MENU_TXT if suricata_ok else C_AVISO)
         linha_texto("  [1]  >>  Iniciar sensor", C_WHITE)
         linha_vazia()
         linha_texto("  --- Configuracao -------------------------------------------", C_NEON_DIM)
@@ -494,6 +499,7 @@ def tela_config_ip(cfg: dict) -> dict:
     aguardar_enter()
     return cfg
 
+
 def tela_config_nome(cfg: dict) -> dict:
     cabecalho(cfg)
     linha_texto("  CONFIGURAR NOME DO SENSOR", C_TITULO)
@@ -507,6 +513,7 @@ def tela_config_nome(cfg: dict) -> dict:
         print_resultado(False, "Nenhuma alteracao feita.")
     aguardar_enter()
     return cfg
+
 
 def tela_config_severidade(cfg: dict) -> dict:
     cabecalho(cfg)
@@ -525,6 +532,7 @@ def tela_config_severidade(cfg: dict) -> dict:
     aguardar_enter()
     return cfg
 
+
 def tela_config_eve(cfg: dict) -> dict:
     cabecalho(cfg)
     linha_texto("  CONFIGURAR CAMINHO DO EVE.JSON", C_TITULO)
@@ -541,6 +549,7 @@ def tela_config_eve(cfg: dict) -> dict:
         print_resultado(True, f"Caminho salvo: {caminho}")
     aguardar_enter()
     return cfg
+
 
 def tela_testar_conexao(cfg: dict):
     cabecalho(cfg)
@@ -589,7 +598,7 @@ def tela_testar_conexao(cfg: dict):
             return requests.post(
                 cfg["Moon_url"] + "/incidentes/api/ingest/",
                 json=payload, timeout=5,
-                headers={"X-JG-TOKEN": cfg.get("token", "")},
+                headers={"X-MS-TOKEN": cfg.get("token", "")},
             )
         r2 = spinner_inline("Testando endpoint /ingest/...", _post)
         if r2.status_code == 200:
@@ -603,28 +612,95 @@ def tela_testar_conexao(cfg: dict):
 
     aguardar_enter()
 
+
 def tela_ver_config(cfg: dict):
     cabecalho(cfg)
     linha_texto("  CONFIGURACAO ATUAL", C_TITULO)
     linha_vazia()
-    linha_texto(f"  Moon URL    : {cfg['Moon_url'] or '(vazio)'}", C_DIM)
+
+    # ── Sensor / Painel ───────────────────────────────────────────────────────
+    linha_texto("  -- Sensor ------------------------------------------", C_NEON_DIM)
+    linha_texto(f"  Moon URL      : {cfg.get('Moon_url') or '(vazio)'}", C_DIM)
     linha_texto(f"  Usuario       : {cfg.get('Moon_usuario') or '(nao configurado)'}", C_DIM)
     linha_texto(f"  Senha         : {'********' if cfg.get('Moon_senha') else '(nao configurada)'}", C_DIM)
-    linha_texto(f"  Nome sensor   : {cfg['sensor_nome']}", C_WHITE)
-    linha_texto(f"  Eve.json      : {cfg['eve_path']}", C_DIM)
-    linha_texto(f"  Severidade    : {SEVERIDADE_LABEL.get(cfg['min_severity'], '?')}", C_DIM)
-    linha_texto(f"  Batch size    : {cfg['batch_size']} eventos", C_DIM)
-    linha_texto(f"  Batch timeout : {cfg['batch_timeout']}s", C_DIM)
+    linha_texto(f"  Nome sensor   : {cfg.get('sensor_nome', '')}", C_WHITE)
+    linha_texto(f"  Eve.json      : {cfg.get('eve_path', '')}", C_DIM)
+    linha_texto(f"  Severidade    : {SEVERIDADE_LABEL.get(cfg.get('min_severity', '4'), '?')}", C_DIM)
+    linha_texto(f"  Batch size    : {cfg.get('batch_size', 20)} eventos", C_DIM)
+    linha_texto(f"  Batch timeout : {cfg.get('batch_timeout', 5)}s", C_DIM)
     linha_vazia()
+
+    # ── Topologia de rede ─────────────────────────────────────────────────────
+    linha_texto("  -- Topologia ----------------------------------------", C_NEON_DIM)
+
+    suricata_ok = cfg.get("suricata_ok", False)
+    wizard_ok   = cfg.get("wizard_ok", cfg.get("configurado", False))
+
+    linha_texto(
+        f"  Wizard        : {'[OK]' if wizard_ok else '[!!] nao concluido'}",
+        C_OK if wizard_ok else C_AVISO,
+    )
+    linha_texto(
+        f"  Suricata      : {'[OK] configurado' if suricata_ok else '[!!] nao configurado'}",
+        C_OK if suricata_ok else C_AVISO,
+    )
+    linha_vazia()
+
+    iface_lan  = cfg.get("interface_lan", "")
+    iface_wan  = cfg.get("interface_wan", "")
+    iface_mgmt = cfg.get("interface_mgmt", "")
+    monit      = cfg.get("interfaces_monitoradas", [])
+    home_net   = cfg.get("home_net", [])
+    dns        = cfg.get("dns_interno", "")
+    yaml_path  = cfg.get("suricata_yaml", "")
+
+    linha_texto(
+        f"  WAN           : {iface_wan or '(nao configurada)'}",
+        C_DIM if iface_wan else C_AVISO,
+    )
+    linha_texto(
+        f"  LAN           : {iface_lan or '(nao configurada)'}",
+        C_OK if iface_lan else C_AVISO,
+    )
+    linha_texto(
+        f"  MGMT          : {iface_mgmt if iface_mgmt else '(nenhuma)'}",
+        C_DIM,
+    )
+    linha_vazia()
+
+    if monit:
+        linha_texto("  Monitoradas   : " + ", ".join(monit), C_DIM)
+    else:
+        linha_texto("  Monitoradas   : (nenhuma)", C_AVISO)
+
+    if home_net:
+        linha_texto("  HOME_NET      : " + ", ".join(home_net), C_OK)
+    else:
+        linha_texto("  HOME_NET      : (nao configurado)", C_AVISO)
+
+    linha_texto(
+        f"  DNS interno   : {dns or '(nao configurado)'}",
+        C_DIM if dns else C_AVISO,
+    )
+    linha_texto(
+        f"  suricata.yaml : {yaml_path or '(nao configurado)'}",
+        C_DIM if yaml_path else C_AVISO,
+    )
+    linha_vazia()
+
+    # ── Status eve.json ───────────────────────────────────────────────────────
     separador_fino()
     linha_vazia()
-    if os.path.exists(cfg["eve_path"]):
+    eve = cfg.get("eve_path", "")
+    if eve and os.path.exists(eve):
         from nucleo.utilitarios import tamanho_arquivo
-        tam = tamanho_arquivo(cfg["eve_path"])
+        tam = tamanho_arquivo(eve)
         print_resultado(True, f"eve.json encontrado  ({tam:,} bytes)")
     else:
         print_resultado(False, "eve.json NAO encontrado no caminho configurado.")
+
     aguardar_enter()
+
 
 def tela_config_credenciais(cfg: dict) -> dict:
     cabecalho(cfg)
