@@ -33,16 +33,6 @@ _session_lock = threading.Lock()
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _autenticar(cfg: dict) -> bool:
-    """
-    Faz login no MoonShield e armazena os cookies na _session global.
-    Retorna True se autenticado com sucesso.
-
-    O sensor precisa de sessão autenticada porque api/data/ usa @login_required.
-    O endpoint api/ingest/ aceita X-MS-TOKEN, mas para consistência e segurança
-    mantemos a sessão ativa.
-    """
-    from nucleo.interface import _fazer_login
-
     usuario = cfg.get("Moon_usuario", "")
     senha   = cfg.get("Moon_senha", "")
 
@@ -84,6 +74,33 @@ def _autenticar(cfg: dict) -> bool:
         with _stats_lock:
             _stats["login_ok"] = False
         return False
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CURSOR — persiste posição no eve.json entre reinicializações
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _cursor_path(eve_path: str) -> str:
+    return eve_path + ".moonshield.cursor"
+
+
+def _ler_cursor(eve_path: str) -> int | None:
+    """Retorna a última posição salva, ou None se não existir."""
+    cp = _cursor_path(eve_path)
+    try:
+        with open(cp, "r") as f:
+            return int(f.read().strip())
+    except Exception:
+        return None
+
+
+def _salvar_cursor(eve_path: str, pos: int):
+    cp = _cursor_path(eve_path)
+    try:
+        with open(cp, "w") as f:
+            f.write(str(pos))
+    except Exception:
+        pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -219,7 +236,17 @@ def _loop_sensor(cfg: dict):
     last_reauth = time.time()
 
     with open(eve_path, "r", encoding="utf-8", errors="ignore") as f:
-        f.seek(0, os.SEEK_END)
+
+        # ── Posicionamento inicial ────────────────────────────────────────────
+        # FIX: antes era f.seek(0, os.SEEK_END) — isso descartava todo o
+        # histórico. Agora:
+        #   • Se existe cursor salvo → retoma de onde parou (restart seguro)
+        #   • Se não existe cursor   → lê do início (processa histórico completo)
+        cursor_salvo = _ler_cursor(eve_path)
+        if cursor_salvo is not None:
+            f.seek(cursor_salvo)
+        else:
+            f.seek(0)   # primeira execução → processa histórico completo
 
         while True:
             with _stats_lock:
@@ -240,10 +267,12 @@ def _loop_sensor(cfg: dict):
 
                 if buffer and tempo_desde_envio >= batch_timeout:
                     ok = _enviar(ingest_url, sensor_nome, buffer, cfg)
+                    pos = f.tell()
                     with _stats_lock:
                         if ok:
                             _stats["sent"]  += len(buffer)
                             _stats["ultimo"] = agora()
+                            _salvar_cursor(eve_path, pos)
                         else:
                             _stats["erros"] += len(buffer)
                         _stats["buffer"] = 0
@@ -292,10 +321,12 @@ def _loop_sensor(cfg: dict):
 
             if len(buffer) >= batch_size or (time.time() - last_send) >= batch_timeout:
                 ok = _enviar(ingest_url, sensor_nome, buffer, cfg)
+                pos = f.tell()
                 with _stats_lock:
                     if ok:
                         _stats["sent"]  += len(buffer)
                         _stats["ultimo"] = agora()
+                        _salvar_cursor(eve_path, pos)
                     else:
                         _stats["erros"] += len(buffer)
                     _stats["buffer"] = 0
@@ -308,11 +339,6 @@ def _loop_sensor(cfg: dict):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _enviar(url: str, sensor_nome: str, buffer: list, cfg: dict) -> bool:
-    """
-    Envia eventos para o MoonShield.
-    Usa a _session global (que mantém cookies de autenticação).
-    Se receber 401/403, tenta reautenticar uma vez.
-    """
     try:
         payload = {"sensor": sensor_nome, "eventos": buffer}
         headers = {
