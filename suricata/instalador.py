@@ -706,12 +706,13 @@ def _copiar_regras_ms() -> bool:
         return False
     try:
         REGRAS_DEST_DIR.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(REGRAS_ORIGEM, REGRAS_DEST)
+        conteudo_rules = REGRAS_ORIGEM.read_text(encoding="utf-8-sig")
+        REGRAS_DEST.write_text(conteudo_rules, encoding="utf-8")
         print_resultado(True, f"Regras MS copiadas → {REGRAS_DEST}")
 
         etc_dest_dir = Path("/etc/suricata/rules/moonshield")
         etc_dest_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(REGRAS_ORIGEM, etc_dest_dir / "ms.rules")
+        (etc_dest_dir / "ms.rules").write_text(conteudo_rules, encoding="utf-8")
         print_resultado(True, f"Regras MS copiadas → {etc_dest_dir / 'ms.rules'}")
 
         return True
