@@ -20,16 +20,16 @@ _stats = {
     "rodando":    False,
     "heartbeats": 0,
     "login_ok":   False,
+    "ultimo_status": "—",   # novo: último HTTP status code do backend
 }
 _stats_lock = threading.Lock()
 
-# Sessão HTTP compartilhada — mantém cookies de sessão entre requisições
-_session = requests.Session()
+_session      = requests.Session()
 _session_lock = threading.Lock()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# AUTENTICAÇÃO
+# AUTENTICAÇÃO (usada APENAS para o painel web — não é necessária para ingest)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _autenticar(cfg: dict) -> bool:
@@ -85,7 +85,6 @@ def _cursor_path(eve_path: str) -> str:
 
 
 def _ler_cursor(eve_path: str) -> int | None:
-    """Retorna a última posição salva, ou None se não existir."""
     cp = _cursor_path(eve_path)
     try:
         with open(cp, "r") as f:
@@ -129,16 +128,16 @@ def tela_sensor(cfg: dict):
         aguardar_enter()
         return
 
-    # Reset stats
     with _stats_lock:
-        _stats["seen"]       = 0
-        _stats["sent"]       = 0
-        _stats["erros"]      = 0
-        _stats["buffer"]     = 0
-        _stats["ultimo"]     = "—"
-        _stats["heartbeats"] = 0
-        _stats["login_ok"]   = False
-        _stats["rodando"]    = True
+        _stats["seen"]           = 0
+        _stats["sent"]           = 0
+        _stats["erros"]          = 0
+        _stats["buffer"]         = 0
+        _stats["ultimo"]         = "—"
+        _stats["heartbeats"]     = 0
+        _stats["login_ok"]       = False
+        _stats["rodando"]        = True
+        _stats["ultimo_status"]  = "—"
 
     limpar()
     if cfg.get("Moon_usuario") and cfg.get("Moon_senha"):
@@ -180,15 +179,16 @@ def _loop_display(cfg: dict):
         with _stats_lock:
             if not _stats["rodando"]:
                 break
-            seen     = _stats["seen"]
-            sent     = _stats["sent"]
-            erros    = _stats["erros"]
-            buf      = _stats["buffer"]
-            ultimo   = _stats["ultimo"]
-            hb       = _stats["heartbeats"]
-            login_ok = _stats["login_ok"]
+            seen          = _stats["seen"]
+            sent          = _stats["sent"]
+            erros         = _stats["erros"]
+            buf           = _stats["buffer"]
+            ultimo        = _stats["ultimo"]
+            hb            = _stats["heartbeats"]
+            login_ok      = _stats["login_ok"]
+            ultimo_status = _stats["ultimo_status"]
 
-        usuario = cfg.get("Moon_usuario", "")
+        usuario   = cfg.get("Moon_usuario", "")
         login_str = f"✔ {usuario}" if login_ok else ("✗ não autenticado" if usuario else "— sem credenciais")
         login_cor = C_OK if login_ok else (C_ERRO if usuario else C_DIM)
 
@@ -207,6 +207,7 @@ def _loop_display(cfg: dict):
         linha_texto(f"  Buffer pendente   : {buf}", C_DIM)
         linha_texto(f"  Heartbeats        : {hb}", C_DIM)
         linha_texto(f"  Último envio      : {ultimo}", C_DIM)
+        linha_texto(f"  Último status HTTP: {ultimo_status}", C_DIM)
         separador()
         linha_texto("  Pressione Ctrl+C para parar o sensor", C_DIM)
         fundo()
@@ -218,9 +219,9 @@ def _loop_display(cfg: dict):
 # LOOP PRINCIPAL DO SENSOR
 # ══════════════════════════════════════════════════════════════════════════════
 
-HEARTBEAT_INTERVAL    = 30    # segundos entre heartbeats
-DEFAULT_BATCH_TIMEOUT = 2     # segundos sem linha nova para enviar buffer pendente
-REAUTH_INTERVAL       = 3600  # 1 hora — renova sessão periodicamente
+HEARTBEAT_INTERVAL    = 15
+DEFAULT_BATCH_TIMEOUT = 2
+REAUTH_INTERVAL       = 3600
 
 
 def _loop_sensor(cfg: dict):
@@ -237,32 +238,25 @@ def _loop_sensor(cfg: dict):
 
     with open(eve_path, "r", encoding="utf-8", errors="ignore") as f:
 
-        # ── Posicionamento inicial ────────────────────────────────────────────
-        # FIX: antes era f.seek(0, os.SEEK_END) — isso descartava todo o
-        # histórico. Agora:
-        #   • Se existe cursor salvo → retoma de onde parou (restart seguro)
-        #   • Se não existe cursor   → lê do início (processa histórico completo)
         cursor_salvo = _ler_cursor(eve_path)
         if cursor_salvo is not None:
             f.seek(cursor_salvo)
         else:
-            f.seek(0)   # primeira execução → processa histórico completo
+            f.seek(0)
 
         while True:
             with _stats_lock:
                 if not _stats["rodando"]:
                     break
 
-            # Reautenticação periódica (mantém sessão viva)
             if time.time() - last_reauth >= REAUTH_INTERVAL:
                 _autenticar(cfg)
                 last_reauth = time.time()
 
             line = f.readline()
 
-            # ── Sem linha nova ────────────────────────────────────────────────
             if not line:
-                agora_ts = time.time()
+                agora_ts          = time.time()
                 tempo_desde_envio = agora_ts - last_send
 
                 if buffer and tempo_desde_envio >= batch_timeout:
@@ -292,7 +286,6 @@ def _loop_sensor(cfg: dict):
                 time.sleep(0.1)
                 continue
 
-            # ── Processa linha ────────────────────────────────────────────────
             line = line.strip()
             if not line:
                 continue
@@ -341,6 +334,8 @@ def _loop_sensor(cfg: dict):
 def _enviar(url: str, sensor_nome: str, buffer: list, cfg: dict) -> bool:
     try:
         payload = {"sensor": sensor_nome, "eventos": buffer}
+
+        # ── X-MS-TOKEN — alinhado com o backend (consumidor.py v5) ───────────
         headers = {
             "Content-Type": "application/json",
             "X-MS-TOKEN":   cfg.get("token", ""),
@@ -349,22 +344,50 @@ def _enviar(url: str, sensor_nome: str, buffer: list, cfg: dict) -> bool:
         with _session_lock:
             resp = _session.post(url, json=payload, timeout=5, headers=headers)
 
-        # Sessão expirou — reautentica e tenta de novo
-        if resp.status_code in (401, 403):
-            _autenticar(cfg)
-            with _session_lock:
-                resp = _session.post(url, json=payload, timeout=5, headers=headers)
+        # ── Log da resposta real — visível no terminal em modo --auto ─────────
+        status_str = f"HTTP {resp.status_code}"
+        with _stats_lock:
+            _stats["ultimo_status"] = status_str
 
-        if 200 <= resp.status_code < 300:
+        # ── FIX: Tratamento de erro 403 e Auto-Recovery (Re-bootstrap) ────────
+        if resp.status_code == 403:
+            print(f"[{agora()}] WARN: {status_str} | body: {resp.text[:200]}")
+            
+            # Se o backend mandou um novo token no JSON de erro (re-bootstrap), salva ele
+            try:
+                dados = resp.json()
+                if "token" in dados:
+                    cfg["token"] = dados["token"]
+                    salvar_config(cfg)
+                    print(f"[{agora()}] INFO: Novo token de re-bootstrap salvo com sucesso.")
+            except Exception:
+                pass
+                
+            return False
+
+        if not (200 <= resp.status_code < 300):
+            print(f"[{agora()}] WARN: {status_str} | body: {resp.text[:200]}")
+            return False
+
+        # ── Persistir token devolvido pelo backend (primeiro contato) ─────────
+        try:
             data = resp.json()
-            if data.get("token"):
-                cfg["token"] = data["token"]
+            token_novo = data.get("token", "")
+            if token_novo and token_novo != cfg.get("token", ""):
+                cfg["token"] = token_novo
                 salvar_config(cfg)
-            return True
+        except Exception:
+            pass
 
+        return True
+
+    except requests.exceptions.ConnectionError:
+        with _stats_lock:
+            _stats["ultimo_status"] = "CONN ERR"
         return False
-
-    except Exception:
+    except Exception as e:
+        with _stats_lock:
+            _stats["ultimo_status"] = f"ERR: {str(e)[:30]}"
         return False
 
 
@@ -404,14 +427,16 @@ def modo_auto(cfg: dict):
         while True:
             time.sleep(60)
             with _stats_lock:
-                s  = _stats["seen"]
-                e  = _stats["sent"]
-                er = _stats["erros"]
-                hb = _stats["heartbeats"]
-                lo = _stats["login_ok"]
+                s      = _stats["seen"]
+                e      = _stats["sent"]
+                er     = _stats["erros"]
+                hb     = _stats["heartbeats"]
+                lo     = _stats["login_ok"]
+                status = _stats["ultimo_status"]
             print(
                 f"[{agora()}] stats | vistos={s} | enviados={e} | "
-                f"erros={er} | heartbeats={hb} | login={'ok' if lo else 'falhou'}",
+                f"erros={er} | heartbeats={hb} | "
+                f"login={'ok' if lo else 'falhou'} | ultimo_http={status}",
                 flush=True,
             )
 
