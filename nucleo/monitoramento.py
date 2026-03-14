@@ -89,7 +89,7 @@ def _salvar_cursor(eve_path: str, pos: int):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ANIMAÇÃO ESPACIAL
+# ANIMAÇÃO ESPACIAL — Lua azul com crateras + escudo elíptico + asteroides
 # ══════════════════════════════════════════════════════════════════════════════
 
 _ANIM_W = 52
@@ -100,27 +100,102 @@ _MOON_CY = _ANIM_H // 2
 _MOON_RX = 7
 _MOON_RY = 4
 
-def _build_moon():
-    cells = {}
-    for r in range(_ANIM_H):
-        for c in range(_ANIM_W):
-            dx   = (c - _MOON_CX) / _MOON_RX
-            dy   = (r - _MOON_CY) / _MOON_RY
-            dist = dx*dx + dy*dy
-            if dist <= 1.0:
-                cells[(r, c)] = 'edge' if dist >= 0.70 else 'fill'
-    return cells
+# ── Paleta ANSI 256 cores ────────────────────────────────────────────────────
+_C = {
+    'reset':    '\033[0m',
+    'dim':      '\033[38;5;238m',
+    'star':     '\033[38;5;67m',
+    # Lua — degradê azul (borda clara → interior médio → lado escuro)
+    'moon_rim': '\033[38;5;153m',   # borda iluminada — azul claro
+    'moon_lit': '\033[38;5;117m',   # face iluminada — azul médio
+    'moon_mid': '\033[38;5;74m',    # face média — azul neutro
+    'moon_drk': '\033[38;5;25m',    # lado escuro — azul escuro
+    'crater':   '\033[38;5;24m',    # crateras — azul profundo
+    # Escudo — ciano elétrico em 3 camadas
+    'shield':   '\033[38;5;87m',    # camada central — ciano brilhante
+    'shield_b': '\033[38;5;123m',   # pulso máximo — ciano branco
+    'shield_o': '\033[38;5;24m',    # camada externa — ciano escuro
+    'shield_i': '\033[38;5;51m',    # camada interna — ciano elétrico
+    # Asteroides e impactos
+    'ast':      '\033[38;5;214m',   # laranja
+    'hit':      '\033[38;5;196m',   # vermelho vivo
+    'spark':    '\033[38;5;226m',   # amarelo brilhante
+    'spark2':   '\033[38;5;202m',   # laranja-fogo
+    # UI
+    'ok':       '\033[38;5;84m',
+    'warn':     '\033[38;5;214m',
+    'err':      '\033[38;5;196m',
+    'neon':     '\033[38;5;87m',
+    'titulo':   '\033[38;5;75m',
+    'normal':   '\033[38;5;252m',
+}
 
-_MOON_CELLS = _build_moon()
+# ── Crateras da lua (posição relativa ao centro) ─────────────────────────────
+_CRATERS = [
+    # (dx, dy, rx, ry)  — coordenadas no espaço da lua, ry ajustado pelo aspect
+    ( 2.5, -1.5, 1.8, 0.85),
+    (-2.8,  1.2, 1.4, 0.65),
+    ( 3.2,  1.8, 1.0, 0.50),
+    (-1.0, -2.5, 0.8, 0.38),
+    ( 0.5,  2.2, 0.7, 0.32),
+    (-3.5, -1.0, 0.9, 0.42),
+]
 
+def _moon_zone(r: int, c: int):
+    """
+    Retorna zona da lua ou None.
+    Zonas: 'rim', 'lit', 'mid', 'dark', 'crater_edge', 'crater_fill', None
+    """
+    dx = c - _MOON_CX
+    dy = r - _MOON_CY
+    # Aspect ratio do terminal (~2:1 largura:altura por char)
+    ex = dx / _MOON_RX
+    ey = (dy * 1.9) / _MOON_RY  # corrige aspect
+    dist2 = ex * ex + ey * ey
+    if dist2 > 1.0:
+        return None
+
+    # Verifica crateras primeiro
+    for (cdx, cdy, crx, cry) in _CRATERS:
+        ex2 = (dx - cdx) / crx
+        ey2 = ((dy * 1.9) - cdy) / cry
+        d2  = ex2 * ex2 + ey2 * ey2
+        if d2 <= 1.0:
+            return 'crater_edge' if d2 >= 0.55 else 'crater_fill'
+
+    # Terminator suave: dx positivo = lado escuro
+    norm_x = dx / _MOON_RX   # -1..+1
+    if dist2 >= 0.88:
+        return 'rim'
+    if norm_x > 0.35:
+        return 'dark'
+    if norm_x > 0.05:
+        return 'mid'
+    return 'lit'
+
+# Textura pre-calculada para a lua (estática)
 _rng_moon = random.Random(42)
-_MOON_TEXTURE = {}
-for _pos, _zone in _MOON_CELLS.items():
-    if _zone == 'edge':
-        _MOON_TEXTURE[_pos] = _rng_moon.choice(['(', ')', '.', ':', ';', '|'])
-    else:
-        _MOON_TEXTURE[_pos] = _rng_moon.choice(['.', ':', '·', ' ', ' ', ' ', ' '])
+_MOON_TEXTURE: dict[tuple, tuple] = {}  # (r,c) -> (ch, color_key)
 
+_MOON_ZONE_CHARS = {
+    'rim':          (['(', ')', '|', '/', '\\', ';'],  'moon_rim'),
+    'lit':          (['.', ':', '·', ' ', ' ', ' '],   'moon_lit'),
+    'mid':          (['.', ' ', ' ', ' '],              'moon_mid'),
+    'dark':         ([' ', ' ', '`', '.'],              'moon_drk'),
+    'crater_edge':  (['(', ')', '.', ':', ';'],         'crater'),
+    'crater_fill':  (['.', ' ', ' '],                   'moon_drk'),
+}
+
+for _r in range(_ANIM_H):
+    for _c in range(_ANIM_W):
+        _z = _moon_zone(_r, _c)
+        if _z:
+            _chars, _col = _MOON_ZONE_CHARS[_z]
+            _MOON_TEXTURE[(_r, _c)] = (_rng_moon.choice(_chars), _col)
+
+_MOON_CELLS = set(_MOON_TEXTURE.keys())
+
+# ── Escudo elíptico multicamada ──────────────────────────────────────────────
 _SHIELD_RX = _MOON_RX + 5
 _SHIELD_RY = _MOON_RY + 3
 
@@ -131,7 +206,7 @@ def _build_shield():
         for c in range(_ANIM_W):
             dx   = (c - _MOON_CX) / _SHIELD_RX
             dy   = (r - _MOON_CY) / _SHIELD_RY
-            dist = dx*dx + dy*dy
+            dist = dx * dx + dy * dy
             if   0.78 <= dist < 0.88:  cells[(r, c)] = 'inner'
             elif 0.88 <= dist < 0.97:  cells[(r, c)] = 'mid'
             elif 0.97 <= dist < 1.08:  cells[(r, c)] = 'outer'
@@ -140,41 +215,32 @@ def _build_shield():
 _SHIELD_CELLS_MAP = _build_shield()
 _SHIELD_CELLS     = set(_SHIELD_CELLS_MAP.keys())
 
-# Paleta de energia do escudo — pisca suavemente em 2 tons
-_SHIELD_ENERGY = [
-    '\033[38;5;87m',   # ciano brilhante
-    '\033[38;5;51m',   # ciano elétrico
-    '\033[38;5;45m',   # azul-ciano
-]
-
-def _shield_char(r, c):
+def _shield_char(r: int, c: int) -> str:
     zone  = _SHIELD_CELLS_MAP.get((r, c), 'mid')
-    top   = (r-1, c)   in _SHIELD_CELLS
-    bot   = (r+1, c)   in _SHIELD_CELLS
-    left  = (r,   c-1) in _SHIELD_CELLS
-    right = (r,   c+1) in _SHIELD_CELLS
+    top   = (r - 1, c) in _SHIELD_CELLS
+    bot   = (r + 1, c) in _SHIELD_CELLS
+    left  = (r, c - 1) in _SHIELD_CELLS
+    right = (r, c + 1) in _SHIELD_CELLS
 
-    if right and bot and not top and not left:   return '╔'
-    if left  and bot and not top and not right:  return '╗'
-    if right and top and not bot and not left:   return '╚'
-    if left  and top and not bot and not right:  return '╝'
-    if left and right and not top and not bot:
+    if right and bot and not top  and not left:  return '╔'
+    if left  and bot and not top  and not right: return '╗'
+    if right and top and not bot  and not left:  return '╚'
+    if left  and top and not bot  and not right: return '╝'
+    if left  and right and not top and not bot:
         return '═' if zone == 'mid' else ('─' if zone == 'outer' else '·')
     if top and bot and not left and not right:
         return '║' if zone == 'mid' else ('│' if zone == 'outer' else '·')
-    # diagonal / curva → pontos de energia que piscam
     if zone == 'inner': return '·'
     if zone == 'outer': return '°'
     return '·'
 
-# ── Lua pequena dentro do escudo (órbita animada) ────────────────────────────
+# ── Lua pequena orbitando ────────────────────────────────────────────────────
 _ORBIT_RX = _SHIELD_RX - 3
 _ORBIT_RY = _SHIELD_RY - 1
 _MINI_RX  = 2
 _MINI_RY  = 1
 
-def _mini_moon_cells(angle_deg: float):
-    import math
+def _mini_moon_cells(angle_deg: float) -> dict:
     angle = math.radians(angle_deg)
     ocx   = _MOON_CX + _ORBIT_RX * math.cos(angle)
     ocy   = _MOON_CY + _ORBIT_RY * math.sin(angle)
@@ -186,7 +252,7 @@ def _mini_moon_cells(angle_deg: float):
             if 0 <= r < _ANIM_H and 0 <= c < _ANIM_W:
                 ex = (c - ocx) / _MINI_RX
                 ey = (r - ocy) / _MINI_RY
-                d  = ex*ex + ey*ey
+                d  = ex * ex + ey * ey
                 if d <= 1.0:
                     cells[(r, c)] = 'edge' if d >= 0.45 else 'fill'
     return cells
@@ -195,33 +261,34 @@ _rng_mini          = random.Random(99)
 _MINI_TEXTURE_EDGE = _rng_mini.choice(['o', '°', 'O'])
 _MINI_TEXTURE_FILL = _rng_mini.choice(['.', '·', ' '])
 
-_rng_stars      = random.Random(7)
-_occupied       = _SHIELD_CELLS | set(_MOON_CELLS.keys())
-_STAR_POSITIONS = []
+# ── Estrelas de fundo ────────────────────────────────────────────────────────
+_rng_stars  = random.Random(7)
+_occupied   = _SHIELD_CELLS | _MOON_CELLS
+_STAR_POSITIONS: list[tuple] = []
 for _attempt in range(800):
     _sr = _rng_stars.randint(0, _ANIM_H - 1)
     _sc = _rng_stars.randint(0, _ANIM_W - 1)
     if (_sr, _sc) not in _occupied and len(_STAR_POSITIONS) < 30:
         _STAR_POSITIONS.append((_sr, _sc, _rng_stars.choice(['·', '.', '*', '\'', '+'])))
 
+# ── Estado da animação ───────────────────────────────────────────────────────
 _anim_state = {
     "asteroids":   [],
     "sparks":      [],
     "tick":        0,
-    "orbit_angle": 0.0,   # graus — lua pequena orbita dentro do escudo
+    "orbit_angle": 0.0,
 }
-
-def _anim_is_moon(r, c):
-    return (r, c) in _MOON_CELLS
 
 def _anim_tick():
     st = _anim_state
     st["tick"] += 1
     t = st["tick"]
-    # Lua pequena dá uma volta completa a cada ~200 ticks (~36s)
+
+    # Lua pequena orbita a cada ~200 ticks
     st["orbit_angle"] = (st["orbit_angle"] + 1.8) % 360
 
-    if t % 25 == 0 and len(st["asteroids"]) < 4:
+    # Spawna asteroide a cada ~25 ticks, máx 5 simultâneos
+    if t % 25 == 0 and len(st["asteroids"]) < 5:
         side = random.choice(['L', 'R'])
         r    = random.randint(0, _ANIM_H - 1)
         c    = 0 if side == 'L' else _ANIM_W - 1
@@ -236,20 +303,22 @@ def _anim_tick():
     for a in st["asteroids"]:
         if a['blocked']:
             a['blink'] += 1
-            if a['blink'] < 8:
+            if a['blink'] < 10:
                 next_asts.append(a)
             continue
         nc = a['c'] + a['dc']
         nr = a['r']
         if nc < 0 or nc >= _ANIM_W:
             continue
-        if (nr, nc) in _SHIELD_CELLS or _anim_is_moon(nr, nc):
-            for dr, dc2 in [(-1,0),(1,0),(0,-1),(0,1),(-1,-1),(-1,1),(1,-1),(1,1)]:
-                sr2, sc2 = a['r']+dr, a['c']+dc2
+        if (nr, nc) in _SHIELD_CELLS or (nr, nc) in _MOON_CELLS:
+            # Impacto — spawna faíscas em 8 direções + diagonais
+            for dr, dc2 in [(-1,0),(1,0),(0,-1),(0,1),(-1,-1),(-1,1),(1,-1),(1,1),(0,-2),(0,2)]:
+                sr2, sc2 = a['r'] + dr, a['c'] + dc2
                 if 0 <= sr2 < _ANIM_H and 0 <= sc2 < _ANIM_W:
                     st["sparks"].append({
                         'r': sr2, 'c': sc2, 'age': 0,
-                        'ch': random.choice(['*', '·', '°', '`', '\''])
+                        'ch':  random.choice(['*', '·', '°', '`', '\'', '+', 'x']),
+                        'col': random.choice(['spark', 'spark2', 'hit']),
                     })
             a['blocked'] = True
             a['blink']   = 0
@@ -259,32 +328,12 @@ def _anim_tick():
             next_asts.append(a)
     st["asteroids"] = next_asts
 
-    st["sparks"] = [s for s in st["sparks"] if s['age'] < 8]
+    st["sparks"] = [s for s in st["sparks"] if s['age'] < 9]
     for s in st["sparks"]:
         s['age'] += 1
 
-_C = {
-    'reset':    '\033[0m',
-    'dim':      '\033[38;5;238m',
-    'star':     '\033[38;5;67m',
-    'moon_e':   '\033[38;5;153m',
-    'moon_f':   '\033[38;5;117m',
-    'shield':   '\033[38;5;87m',      # ciano brilhante — camada central
-    'shield_b': '\033[38;5;123m',     # ciano muito brilhante — pulso máximo
-    'shield_o': '\033[38;5;24m',      # ciano escuro — camada externa
-    'shield_i': '\033[38;5;51m',      # ciano elétrico — camada interna
-    'ast':      '\033[38;5;214m',
-    'hit':      '\033[38;5;196m',
-    'spark':    '\033[38;5;226m',
-    'ok':       '\033[38;5;84m',
-    'warn':     '\033[38;5;214m',
-    'err':      '\033[38;5;196m',
-    'neon':     '\033[38;5;87m',
-    'titulo':   '\033[38;5;75m',
-    'normal':   '\033[38;5;252m',
-}
 
-def _render_space_lines() -> list:
+def _render_space_lines() -> list[str]:
     _anim_tick()
     st   = _anim_state
     tick = st["tick"]
@@ -297,27 +346,31 @@ def _render_space_lines() -> list:
         'inner': ['shield_i', 'shield',   'shield_i'][pulse],
     }
 
+    # Grid: cada célula é (char, color_key)
     grid = [[(' ', 'dim')] * _ANIM_W for _ in range(_ANIM_H)]
 
+    # 1. Estrelas
     for sr, sc, sch in _STAR_POSITIONS:
         grid[sr][sc] = (sch, 'star')
 
-    # Escudo multicamada com pulso de energia
+    # 2. Escudo multicamada
     for (r, c), zone in _SHIELD_CELLS_MAP.items():
         grid[r][c] = (_shield_char(r, c), shield_colors.get(zone, 'shield'))
 
-    for (r, c), zone in _MOON_CELLS.items():
-        ch  = _MOON_TEXTURE[(r, c)]
-        cls = 'moon_e' if zone == 'edge' else 'moon_f'
-        grid[r][c] = (ch, cls)
+    # 3. Lua com textura e crateras
+    for (r, c), (ch, col) in _MOON_TEXTURE.items():
+        grid[r][c] = (ch, col)
 
-    # Lua pequena orbitando dentro do escudo
+    # 4. Lua pequena orbitando
     mini_cells = _mini_moon_cells(st["orbit_angle"])
     for (r, c), zone in mini_cells.items():
         if (r, c) not in _MOON_CELLS and (r, c) not in _SHIELD_CELLS:
-            grid[r][c] = (_MINI_TEXTURE_EDGE if zone == 'edge' else _MINI_TEXTURE_FILL,
-                          'spark' if zone == 'edge' else 'moon_e')
+            grid[r][c] = (
+                _MINI_TEXTURE_EDGE if zone == 'edge' else _MINI_TEXTURE_FILL,
+                'spark' if zone == 'edge' else 'moon_lit',
+            )
 
+    # 5. Asteroides
     for a in st["asteroids"]:
         r, c = a['r'], a['c']
         if 0 <= r < _ANIM_H and 0 <= c < _ANIM_W:
@@ -327,11 +380,15 @@ def _render_space_lines() -> list:
             else:
                 grid[r][c] = (a['ch'], 'ast')
 
+    # 6. Faíscas de impacto
     for s in st["sparks"]:
         r, c = s['r'], s['c']
         if 0 <= r < _ANIM_H and 0 <= c < _ANIM_W:
-            grid[r][c] = (s['ch'], 'spark')
+            # Faíscas mais antigas ficam mais apagadas
+            col = s['col'] if s['age'] < 5 else 'dim'
+            grid[r][c] = (s['ch'], col)
 
+    # Renderiza linhas com ANSI
     lines = []
     for row in grid:
         line     = ""
@@ -356,14 +413,12 @@ def _hide_cursor() -> str:
 def _show_cursor() -> str:
     return "\033[?25h"
 
-# Tela alternativa: entra/sai sem afetar o histórico do terminal
 def _alt_screen_enter() -> str:
     return "\033[?1049h"
 
 def _alt_screen_exit() -> str:
     return "\033[?1049l"
 
-# Move cursor para home (1,1) sem limpar — depois sobrescrevemos cada linha
 def _home() -> str:
     return "\033[H"
 
@@ -422,13 +477,12 @@ def tela_sensor(cfg: dict):
 
     import sys
 
-    # Entra na tela alternativa — o histórico do terminal fica intacto
     sys.stdout.write(_alt_screen_enter())
     sys.stdout.write(_hide_cursor())
     sys.stdout.flush()
 
     if cfg.get("Moon_usuario") and cfg.get("Moon_senha"):
-        sys.stdout.write("\033[2J\033[H")   # limpa só dentro da alt screen
+        sys.stdout.write("\033[2J\033[H")
         sys.stdout.write(f"  Autenticando como {cfg['Moon_usuario']}...\n")
         sys.stdout.flush()
         ok = _autenticar(cfg)
@@ -447,7 +501,6 @@ def tela_sensor(cfg: dict):
         with _stats_lock:
             _stats["rodando"] = False
         time.sleep(0.3)
-        # Sai da tela alternativa → terminal volta exatamente como estava
         sys.stdout.write(_show_cursor())
         sys.stdout.write(_alt_screen_exit())
         sys.stdout.flush()
@@ -459,9 +512,8 @@ def tela_sensor(cfg: dict):
 
 _SPIN = ['◐', '◓', '◑', '◒']
 
-# Largura da coluna esquerda (texto) e direita (animação)
-_LEFT_W  = 36   # chars de conteúdo
-_RIGHT_W = _ANIM_W + 2  # +2 de padding
+_LEFT_W  = 36
+_RIGHT_W = _ANIM_W + 2
 
 def _loop_display(cfg: dict):
     import sys
@@ -505,10 +557,7 @@ def _loop_display(cfg: dict):
             spin_txt = f"[{_SPIN[idx % 4]}]  escudo ativo"
             spin_cor = C_NEON
 
-        # ── Coluna esquerda ───────────────────────────────────────────────────
-        # IMPORTANTE: o número de itens DEVE ser igual a _ANIM_H (20 linhas)
-        # para que a animação direita nunca seja cortada nem sobre linhas vazias.
-        W = _LEFT_W   # alias curto
+        W = _LEFT_W
 
         def _row(txt, cor=C_DIM):
             return (txt, cor)
@@ -520,7 +569,6 @@ def _loop_display(cfg: dict):
         def _sep(l='╠', r='╣'):
             return _row(l + '═' * (W - 2) + r, C_DIM)
 
-        # Bloco de stats — preenche com linhas até bater _ANIM_H
         left_rows = [
             _row('╔' + '═' * (W - 2) + '╗',                  C_DIM),      # 1
             _box('MOONSHIELD — SENSOR ATIVO',                  C_TITULO),   # 2
@@ -543,20 +591,16 @@ def _loop_display(cfg: dict):
             _box('Ctrl+C para parar',                          C_DIM),      # 19
             _row('╚' + '═' * (W - 2) + '╝',                  C_DIM),      # 20
         ]
-        # Garante exatamente _ANIM_H linhas (20), sem depender de contagem manual
+
         while len(left_rows) < _ANIM_H:
             left_rows.append(_row('║' + ' ' * (W - 2) + '║', C_DIM))
         left_rows = left_rows[:_ANIM_H]
 
-        # ── Coluna direita: animação (sempre _ANIM_H linhas) ─────────────────
         right_rows = _render_space_lines()
 
-        # ── Monta frame ───────────────────────────────────────────────────────
         frame_lines = []
         for (ltxt, lcor), rline in zip(left_rows, right_rows):
-            # Linha esquerda (largura fixa, sem ANSI)
             left_part  = '\033[2K' + lcor + ltxt + RESET
-            # Linha direita (já tem ANSI embutido)
             right_part = '  ' + rline
             frame_lines.append(left_part + right_part)
 
