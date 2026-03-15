@@ -103,6 +103,35 @@ def _enable_ansi_windows():
 # TELA DO SENSOR
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _key_reader(stop_event):
+    """
+    Thread que lê stdin em modo raw.
+    Ctrl+C (\x03), Ctrl+X (\x18) ou 'q' param o sensor e voltam ao menu.
+    """
+    import select, termios, tty
+    fd = sys.stdin.fileno()
+    try:
+        old = termios.tcgetattr(fd)
+    except Exception:
+        return
+    def _r():
+        try:
+            tty.setraw(fd)
+            while not stop_event.is_set():
+                r,_,_ = select.select([sys.stdin],[],[],0.1)
+                if r:
+                    ch = sys.stdin.read(1)
+                    if ch in ('\x03','\x18','\x04','q','Q'):
+                        stop_event.set()
+                        break
+        except Exception:
+            stop_event.set()
+        finally:
+            try: termios.tcsetattr(fd, termios.TCSADRAIN, old)
+            except Exception: pass
+    threading.Thread(target=_r, daemon=True).start()
+
+
 def tela_sensor(cfg: dict):
     from nucleo.interface import (
         cabecalho, print_resultado, linha_vazia,
@@ -142,16 +171,21 @@ def tela_sensor(cfg: dict):
         sys.stdout.flush()
         time.sleep(1)
 
-    t_display = threading.Thread(target=_loop_display, args=(cfg,), daemon=True)
+    # Evento de parada — qualquer thread pode setar, o sensor encerra
+    _stop = threading.Event()
+    _key_reader(_stop)
+
+    t_display = threading.Thread(target=_loop_display, args=(cfg, _stop), daemon=True)
     t_display.start()
 
     try:
-        _loop_sensor(cfg)
+        _loop_sensor(cfg, _stop)
     except KeyboardInterrupt:
         pass
     finally:
+        _stop.set()
         with _stats_lock: _stats["rodando"] = False
-        time.sleep(0.3)
+        time.sleep(0.2)
         sys.stdout.write(_show())
         sys.stdout.write(_alt_out())
         sys.stdout.flush()
@@ -168,7 +202,7 @@ _LW    = 36    # largura do painel de stats
 _TOTAL = (_radar.TOTAL_LINES if _RADAR_OK else 31)
 
 
-def _loop_display(cfg: dict):
+def _loop_display(cfg: dict, _stop: threading.Event = None):
     import sys
 
     _R   = '\033[0m'
