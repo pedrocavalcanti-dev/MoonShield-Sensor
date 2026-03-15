@@ -15,11 +15,14 @@ RADIUS=min(CX,CY-1)
 SWEEP_DEG  = 4.5
 TRAIL_DEG  = 80
 TRAIL_LVL  = 8
-PING_LIFE  = 32
+PING_LIFE  = 20   # morre mais rápido — radar fica limpo
 PING_CHARS = ['+','x','*','●','◆']
-NOISE_LIFE = 5
-WAVE_MAX   = 3
-WAVE_LIFE  = 8
+NOISE_LIFE = 4
+WAVE_MAX   = 2
+WAVE_LIFE  = 6
+
+# Máximo de pings simultâneos no radar — mesmo com muitos eventos, não loteia
+_PING_MAX  = 8
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PALETA
@@ -99,17 +102,15 @@ for _r in range(H):
 
 _FILL=[(r,c) for (r,c),k in _CELLS.items() if k=='fill']
 
-# ── grau-marcador na borda: a cada 10° coloca o número ─────────────────────
+# Marcadores na borda: só traços verticais a cada 10°, sem números
 _DEGREE_MARKS={}
 for _deg in range(0,360,10):
-    # posição no anel edge_o
     _a=math.radians(_deg)
     _br=RADIUS*0.97
     _rc=int(round(CY - _br*AY*math.cos(_a)))
     _cc=int(round(CX + _br*math.sin(_a)))
     if 0<=_rc<H and 0<=_cc<W:
-        _lbl=f'{_deg:03d}' if _deg%30==0 else '|'
-        _DEGREE_MARKS[(_rc,_cc)]=_lbl[0]   # só 1 char por célula
+        _DEGREE_MARKS[(_rc,_cc)]='|'
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ESTADO
@@ -134,6 +135,9 @@ def _tick():
     for w in s["waves"]: w["age"]+=1
 
 def add_ping(r=None,c=None):
+    # Com muitos eventos, não acumula mais que _PING_MAX pings simultâneos
+    if len(_st["pings"]) >= _PING_MAX:
+        _st["pings"].pop(0)   # remove o mais antigo
     ang=_st["angle"]
     if r is None:
         for _ in range(60):
