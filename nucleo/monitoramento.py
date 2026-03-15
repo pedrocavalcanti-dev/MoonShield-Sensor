@@ -1,4 +1,5 @@
 ﻿import os
+import sys
 import time
 import json
 import threading
@@ -294,7 +295,7 @@ DEFAULT_BATCH_TIMEOUT = 2
 REAUTH_INTERVAL       = 3600
 
 
-def _loop_sensor(cfg: dict):
+def _loop_sensor(cfg: dict, _stop: threading.Event = None):
     eve_path      = cfg["eve_path"]
     ingest_url    = cfg["Moon_url"] + "/incidentes/api/ingest/"
     sensor_nome   = cfg["sensor_nome"]
@@ -313,6 +314,8 @@ def _loop_sensor(cfg: dict):
         while True:
             with _stats_lock:
                 if not _stats["rodando"]: break
+            if _stop and _stop.is_set(): break
+            if _stop and _stop.is_set(): break
 
             if time.time() - last_reauth >= REAUTH_INTERVAL:
                 _autenticar(cfg); last_reauth = time.time()
