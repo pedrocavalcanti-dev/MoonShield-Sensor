@@ -205,7 +205,7 @@ def tela_sensor(cfg: dict):
 _SPIN  = ['◐', '◓', '◑', '◒']
 _LW    = 36
 
-_TOTAL = (_radar.TOTAL_LINES + 2 if _RADAR_OK else 33)
+_TOTAL = (_radar.TOTAL_LINES + 2 if _RADAR_OK else 38)
 
 # ── Uptime e histograma ───────────────────────────────────────────────────────
 _session_start  = None          # setado em tela_sensor

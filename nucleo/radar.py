@@ -26,24 +26,40 @@ WAVE_LIFE  = 8
 # ══════════════════════════════════════════════════════════════════════════════
 _R = '\033[0m'
 def _fg(n): return f'\033[38;5;{n}m'
+def _bg(n): return f'\033[48;5;{n}m'
 
 SWEEP_PAL = [_fg(82),_fg(46),_fg(40),_fg(34),_fg(28),_fg(22),_fg(237),_fg(235)]
 PING_PAL  = [_fg(226),_fg(220),_fg(214),_fg(208),_fg(166),_fg(130),_fg(237)]
 WAVE_PAL  = [_fg(51),_fg(45),_fg(39),_fg(33),_fg(27),_fg(237)]
 
-C_RING_O=_fg(22); C_RING_M=_fg(28); C_RING_I=_fg(34)
-C_CROSS =_fg(22); C_CENTER=_fg(46);  C_OUT=_fg(232)
-C_NOISE =_fg(234);C_DIM=_fg(238);   C_NAME=_fg(40); C_TAG=_fg(28)
-C_HUD   =_fg(238); C_HUD_V=_fg(34)  # HUD ao redor do radar
+C_RING_O  = _fg(22)
+C_RING_M  = _fg(28)
+C_RING_I  = _fg(34)
+C_CROSS   = _fg(22)
+C_CENTER  = _fg(46)
+# Borda externa — 2 camadas, mais brilhante
+C_EDGE_O  = _fg(46)   # camada externa — verde neon
+C_EDGE_I  = _fg(40)   # camada interna da borda
+# Fundo do radar — levemente esverdeado
+C_BG_IN   = _fg(22)+_bg(233)   # dentro do círculo
+C_OUT     = _fg(232)
+C_NOISE   = _fg(234)
+C_DIM     = _fg(238)
+C_NAME    = _fg(40)
+C_TAG     = _fg(28)
+C_HUD     = _fg(238)
+C_HUD_V   = _fg(34)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# NOME EM ASCII — P.Cavalcanti fonte "small" 3 linhas, centralizado em W
+# NOME ASCII — "P.Cavalcanti" corrigido (P claramente P)
+# fonte manual garantindo curva do P visível
 # ══════════════════════════════════════════════════════════════════════════════
 _NAME_ART = [
-    r" ___    ___               _              _   _ ",
-    r"|  _ \ / __|__ ___ ____ _| |__ __ _ _ _ | |_(_)",
-    r"| |_) | (__/ _` \ V / _` | / _/ _` | ' \|  _| |",
-    r"|____/ \___\__,_|\_/\__,_|_\__\__,_|_||_|\__|_|",
+    r" ____  ____                   _                _   _ ",
+    r"|  _ \/ ___|__ ___   ____ _  | | ___ __ _ _ _ | |_(_)",
+    r"| |_) \___ / _` \ \ / / _` | | |/ __/ _` | ' \|  _| |",
+    r"|  __/ ___| (_| |\ V / (_| | | | (_| (_| | | | | |_| |",
+    r"|_|   |____\__,_| \_/ \__,_| |_|\___\__,_|_| |_|\__|_|",
 ]
 
 def _center(s, width):
@@ -71,18 +87,33 @@ def _rcol(r,c):
 _CELLS={}
 for _r in range(H):
     for _c in range(W):
-        if not _ic(_r,_c): _CELLS[(_r,_c)]='out'
-        elif _r==CY and _c==CX: _CELLS[(_r,_c)]='ctr'
+        if not _ic(_r,_c):
+            _CELLS[(_r,_c)]='out'
+        elif _r==CY and _c==CX:
+            _CELLS[(_r,_c)]='ctr'
         else:
             d=_dist(_r,_c)/RADIUS
-            if abs(d-.33)<.04 or abs(d-.66)<.03 or abs(d-.99)<.03:
-                _CELLS[(_r,_c)]='ring'
-            elif _r==CY or _c==CX:
-                _CELLS[(_r,_c)]='cross'
-            else:
-                _CELLS[(_r,_c)]='fill'
+            # borda dupla: outer (0.93-1.0) e inner (0.87-0.93)
+            if   d>=0.93:              _CELLS[(_r,_c)]='edge_o'
+            elif d>=0.87:              _CELLS[(_r,_c)]='edge_i'
+            elif abs(d-.33)<.035 or abs(d-.55)<.025 or abs(d-.77)<.025:
+                                       _CELLS[(_r,_c)]='ring'
+            elif _r==CY or _c==CX:    _CELLS[(_r,_c)]='cross'
+            else:                      _CELLS[(_r,_c)]='fill'
 
 _FILL=[(r,c) for (r,c),k in _CELLS.items() if k=='fill']
+
+# ── grau-marcador na borda: a cada 10° coloca o número ─────────────────────
+_DEGREE_MARKS={}
+for _deg in range(0,360,10):
+    # posição no anel edge_o
+    _a=math.radians(_deg)
+    _br=RADIUS*0.97
+    _rc=int(round(CY - _br*AY*math.cos(_a)))
+    _cc=int(round(CX + _br*math.sin(_a)))
+    if 0<=_rc<H and 0<=_cc<W:
+        _lbl=f'{_deg:03d}' if _deg%30==0 else '|'
+        _DEGREE_MARKS[(_rc,_cc)]=_lbl[0]   # só 1 char por célula
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ESTADO
@@ -119,36 +150,25 @@ def add_ping(r=None,c=None):
     _st["event_count"]+=1
 
 # ══════════════════════════════════════════════════════════════════════════════
-# HUD — linhas acima/abaixo do radar com azimute, contatos e coord fictícias
+# HUD
 # ══════════════════════════════════════════════════════════════════════════════
 def _hud_top():
-    az   = int(_st["angle"])
-    cont = len(_st["pings"])
-    ev   = _st["event_count"]
-    left  = f'AZ:{az:03d}°'
-    mid   = f'CONTACTS:{cont}'
-    right = f'EVT:{ev}'
-    # distribui os 3 campos ao longo de W chars
-    gap1 = (W - len(left) - len(mid) - len(right)) // 2
-    gap2 =  W - len(left) - len(mid) - len(right) - gap1
-    return C_HUD + left + ' '*gap1 + C_HUD_V + mid + C_HUD + ' '*gap2 + right + _R
+    az=int(_st["angle"]); cont=len(_st["pings"]); ev=_st["event_count"]
+    l=f'AZ:{az:03d}\u00b0'; m=f'CONTACTS:{cont}'; rr=f'EVT:{ev}'
+    g1=(W-len(l)-len(m)-len(rr))//2
+    g2=W-len(l)-len(m)-len(rr)-g1
+    return C_HUD+l+' '*g1+C_HUD_V+m+C_HUD+' '*g2+rr+_R
 
 def _hud_bot():
-    # coordenadas que derivam levemente do tick para parecer vivas
-    t    = _st["tick"]
-    lat  = 23.0 + math.sin(t * 0.003) * 0.05
-    lon  = 41.0 + math.cos(t * 0.002) * 0.05
-    ns   = 'S' if lat < 0 else 'N'
-    ew   = 'W' if lon < 0 else 'E'
-    coord= f'{ns}{abs(lat):06.3f}  {ew}{abs(lon):06.3f}'
-    mode = 'SCAN'
-    left  = f'MODE:{mode}'
-    right = f'POS:{coord}'
-    gap   = W - len(left) - len(right)
-    return C_HUD + left + ' '*max(1,gap) + right + _R
+    t=_st["tick"]
+    lat=23.0+math.sin(t*0.003)*0.05; lon=41.0+math.cos(t*0.002)*0.05
+    coord=f'N{abs(lat):06.3f}  E{abs(lon):06.3f}'
+    l='MODE:SCAN'; rr=f'POS:{coord}'
+    g=W-len(l)-len(rr)
+    return C_HUD+l+' '*max(1,g)+rr+_R
 
 # ══════════════════════════════════════════════════════════════════════════════
-# RENDER — retorna lista de linhas ANSI
+# RENDER
 # ══════════════════════════════════════════════════════════════════════════════
 def get_radar_lines():
     _tick()
@@ -158,11 +178,10 @@ def get_radar_lines():
 
     wave_cells={}
     for wv in _st["waves"]:
-        wr=(wv["age"]+1)*1.6
-        wi=wv["age"]/WAVE_LIFE
+        wr=(wv["age"]+1)*1.6; wi=wv["age"]/WAVE_LIFE
         for r in range(H):
             for c in range(W):
-                if _CELLS[(r,c)] in ('fill','ring','cross'):
+                if _CELLS[(r,c)] in ('fill','ring','cross','edge_i'):
                     dx=c-wv["cc"]; dy=(r-wv["cr"])/AY
                     d=math.sqrt(dx*dx+dy*dy)
                     if abs(d-wr)<1.2:
@@ -177,17 +196,36 @@ def get_radar_lines():
             seg+=ch
         for c in range(W):
             k=_CELLS[(r,c)]
-            if k=='out':   w(C_OUT,' ');    continue
-            if k=='ctr':   w(C_CENTER,'+'); continue
+
+            if k=='out':
+                w(C_OUT,' '); continue
+
+            # borda externa brilhante — com marcadores de grau
+            if k=='edge_o':
+                ch=_DEGREE_MARKS.get((r,c),'░')
+                w(C_EDGE_O,ch); continue
+
+            # borda interna
+            if k=='edge_i':
+                w(C_EDGE_I,'▒'); continue
+
+            if k=='ctr':
+                w(C_CENTER,'+'); continue
+
+            # ping
             if (r,c) in pmap:
                 p=pmap[(r,c)]
                 pi=min(p["age"]*len(PING_PAL)//PING_LIFE,len(PING_PAL)-1)
                 ch=p["ch"] if p["age"]%3!=1 else '·'
                 w(PING_PAL[pi],ch); continue
+
+            # onda
             if (r,c) in wave_cells:
                 wi=wave_cells[(r,c)]
                 wpi=min(int((1-wi)*len(WAVE_PAL)),len(WAVE_PAL)-1)
                 w(WAVE_PAL[wpi],'·'); continue
+
+            # sweep
             diff=(sweep-_ang(r,c))%360
             if diff<=TRAIL_DEG:
                 lvl=int(diff/TRAIL_DEG*(TRAIL_LVL-1))
@@ -195,30 +233,33 @@ def get_radar_lines():
                 elif k=='cross': ch='─' if r==CY else '│'
                 else:            ch=['█','▓','▓','▒','░','░','·',' '][lvl]
                 w(SWEEP_PAL[lvl],ch); continue
+
+            # ruído
             if (r,c) in nset: w(C_NOISE,'·'); continue
+
+            # estrutura base
             if k=='ring':    w(_rcol(r,c),'·')
             elif k=='cross': w(C_CROSS,'─' if r==CY else '│')
-            else:            w(C_OUT,' ')
+            else:            w(C_BG_IN,' ')   # fundo esverdeado
+
         lines.append(seg+_R)
     return lines
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ASSINATURA — separador + nome ASCII + tagline
-# Ordem: sep · HUD top · radar · HUD bot · sep · nome ASCII · tagline
+# ASSINATURA
 # ══════════════════════════════════════════════════════════════════════════════
 def get_signature_lines():
-    sep = C_DIM + '·'*W + _R
-    tl  = 'network sensor  //  MoonShield'
-    out = [sep]
+    sep=C_DIM+'·'*W+_R
+    tl='network sensor  //  MoonShield'
+    out=[sep]
     for line in _NAME_ART:
-        out.append(C_NAME + _center(line, W) + _R)
-    out.append(C_TAG + _center(tl, W) + _R)
+        out.append(C_NAME+_center(line,W)+_R)
+    out.append(C_TAG+_center(tl,W)+_R)
     return out
 
-# get_radar_lines retorna H linhas
-# get_signature_lines retorna 1 + 4 + 1 = 6 linhas
-# HUD top e bot são injetados no standalone e no monitoramento via get_hud_*
-TOTAL_LINES = H + 6   # radar + assinatura (sem HUD — monitoramento não usa HUD)
+# H radar + 2 HUD + 1 sep + 5 nome + 1 tagline = H+9
+# mas get_signature_lines = 1+5+1 = 7, HUD não conta no TOTAL (injetado fora)
+TOTAL_LINES = H + 7
 
 def get_hud_top(): return _hud_top()
 def get_hud_bot(): return _hud_bot()
@@ -227,27 +268,24 @@ def get_hud_bot(): return _hud_bot()
 # KEY READER
 # ══════════════════════════════════════════════════════════════════════════════
 def _start_key_reader(stop_event):
-    fd = sys.stdin.fileno()
-    try:
-        old = termios.tcgetattr(fd)
-    except Exception:
-        return
+    fd=sys.stdin.fileno()
+    try: old=termios.tcgetattr(fd)
+    except Exception: return
     def _reader():
         try:
             tty.setraw(fd)
             import select
             while not stop_event.is_set():
-                r,_,_ = select.select([sys.stdin],[],[],0.1)
+                r,_,_=select.select([sys.stdin],[],[],0.1)
                 if r:
-                    ch = sys.stdin.read(1)
+                    ch=sys.stdin.read(1)
                     if ch in ('\x03','\x18','\x04','q','Q'):
                         stop_event.set(); break
-        except Exception:
-            stop_event.set()
+        except Exception: stop_event.set()
         finally:
-            try: termios.tcsetattr(fd, termios.TCSADRAIN, old)
+            try: termios.tcsetattr(fd,termios.TCSADRAIN,old)
             except Exception: pass
-    threading.Thread(target=_reader, daemon=True).start()
+    threading.Thread(target=_reader,daemon=True).start()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # STANDALONE
@@ -257,15 +295,11 @@ def _run():
         import ctypes; k=ctypes.windll.kernel32  # type: ignore
         k.SetConsoleMode(k.GetStdHandle(-11),7)
     except Exception: pass
-
     out=sys.stdout; stop=threading.Event()
     out.write('\033[?1049h\033[?25l\033[?1000l\033[?1002l\033[?1006l\033[2J\033[H')
     out.flush()
-
     ttl='M O O N S H I E L D   R A D A R'
-    pad=_center(ttl,W)
     bdr=C_DIM+'─'*W+_R
-
     _start_key_reader(stop)
     for _ in range(3): add_ping()
     t=0
