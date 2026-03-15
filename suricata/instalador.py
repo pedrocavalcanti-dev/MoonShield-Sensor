@@ -17,13 +17,15 @@ Fluxo:
   7  Backup do suricata.yaml
   8  Aplicar patches (HOME_NET multi-rede, rule-files, eve-log, af-packet)
   9  Validar com suricata -T → restaurar backup se falhar
-  10 Habilitar + reiniciar serviço
+  9b Corrigir override.conf do systemd (remove --pcap hardcoded, adiciona --af-packet)
+  10 Habilitar + reiniciar serviço (aguarda até 15s para estabilizar)
   11 Verificar eve.json
 """
 
 import os
 import re
 import sys
+import time
 import shutil
 import ipaddress
 from pathlib import Path
@@ -113,7 +115,9 @@ def executar_instalacao(cfg: dict) -> dict:
         return cfg
 
     print_resultado(True, "suricata -T → configuração válida.")
-    _corrigir_override_systemd(yaml_path)   
+
+    # Corrige override ANTES de reiniciar — passa as interfaces monitoradas
+    _corrigir_override_systemd(yaml_path, topo["interfaces_monitoradas"])
 
     ok, msg = _reiniciar_servico()
     if ok:
@@ -315,7 +319,6 @@ def _escolher_interface() -> dict | None:
 
     wan_sugerida = _detectar_wan()
 
-    # ── Exibe tabela ──────────────────────────────────────────────────────────
     _exibir_tabela_interfaces(ifaces, wan_sugerida)
 
     # ── PASSO 1 — Escolher WAN ────────────────────────────────────────────────
@@ -357,10 +360,8 @@ def _escolher_interface() -> dict | None:
         print_resultado(False, "Só há uma interface além da WAN. Impossível continuar.")
         return None
 
-    # Re-exibe só as restantes para facilitar
     _exibir_tabela_interfaces(ifaces_sem_wan, "")
 
-    # Sugere a interface com mais RX que não seja WAN
     candidatos = [f for f in ifaces_sem_wan if f["estado"] == "up"]
     idx_lan_sug = "1"
     if candidatos:
@@ -380,10 +381,9 @@ def _escolher_interface() -> dict | None:
 
     print_resultado(True, f"LAN: {iface_lan['nome']}  ({iface_lan['cidr']})")
 
-    # HOME_NET começa com a rede da LAN
     home_net = [str(ipaddress.IPv4Network(iface_lan["cidr"], strict=False))]
 
-    # ── PASSO 3 — MGMT (opcional, só se sobrar interface) ─────────────────────
+    # ── PASSO 3 — MGMT ────────────────────────────────────────────────────────
     iface_mgmt = None
     ifaces_restantes = [
         f for f in ifaces
@@ -439,7 +439,6 @@ def _escolher_interface() -> dict | None:
         interfaces_monitoradas = [iface_lan["nome"], iface_wan["nome"]]
 
     else:
-        # Modo personalizado — exibe todas exceto MGMT
         ifaces_disponiveis = [
             f for f in ifaces
             if iface_mgmt is None or f["nome"] != iface_mgmt["nome"]
@@ -473,11 +472,10 @@ def _escolher_interface() -> dict | None:
         linha_texto(f"    • {nome}  {info.get('cidr', '')}", C_OK)
 
     # ── PASSO 5 — HOME_NET adicional ──────────────────────────────────────────
-    # Redes das interfaces monitoradas que ainda não estão no HOME_NET
     redes_candidatas = []
     for nome in interfaces_monitoradas:
         if nome == iface_lan["nome"]:
-            continue  # já está no HOME_NET
+            continue
         info = next((f for f in ifaces if f["nome"] == nome), None)
         if not info:
             continue
@@ -552,6 +550,7 @@ def _escolher_interface() -> dict | None:
     linha_texto("    • suricata.yaml reescrito com as interfaces selecionadas", C_DIM)
     linha_texto("    • HOME_NET configurado com as redes selecionadas", C_DIM)
     linha_texto("    • Configuração validada com suricata -T", C_DIM)
+    linha_texto("    • override.conf do systemd corrigido", C_DIM)
     linha_texto("    • Suricata reiniciado", C_DIM)
     linha_vazia()
 
@@ -858,7 +857,6 @@ def _sanitizar_e_patch_af_packet(conteudo: str, interfaces: list) -> str:
     """
     Reescreve af-packet apenas com as interfaces selecionadas pelo usuário.
     LAN = cluster-id 99, demais incrementam (100, 101...).
-    Remove eth0/eth1/placeholders originais.
     """
     linhas_bloco = ["af-packet:", "  # == MOONSHIELD =="]
 
@@ -927,11 +925,18 @@ def _testar_suricata(yaml_path: Path) -> tuple:
 # 9b — CORRIGIR OVERRIDE SYSTEMD
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _corrigir_override_systemd(yaml_path: Path) -> None:
+def _corrigir_override_systemd(yaml_path: Path, interfaces: list) -> None:
     """
     O apt cria /etc/systemd/system/suricata.service.d/override.conf
     com --pcap=<iface> hardcoded, ignorando o af-packet do yaml.
-    Este método sobrescreve o override para usar apenas o yaml.
+
+    Fixes aplicados:
+      1. Remove --pcap hardcoded
+      2. Adiciona --af-packet (sem ele o Suricata não sabe o modo e imprime help + exit 1)
+      3. Aponta para o yaml correto
+
+    O parâmetro --af-packet sem valor faz o Suricata ler as interfaces
+    do bloco af-packet: no suricata.yaml — exatamente o que queremos.
     """
     override = Path("/etc/systemd/system/suricata.service.d/override.conf")
     try:
@@ -939,12 +944,14 @@ def _corrigir_override_systemd(yaml_path: Path) -> None:
         override.write_text(
             "[Service]\n"
             "ExecStart=\n"
-            f"ExecStart=/usr/bin/suricata -D -c {yaml_path} --pidfile /run/suricata.pid\n"
+            f"ExecStart=/usr/bin/suricata -D --af-packet -c {yaml_path} --pidfile /run/suricata.pid\n"
         )
         run_cmd("systemctl daemon-reload")
-        print_resultado(True, "override.conf corrigido → af-packet ativo.")
+        ifaces_str = ", ".join(interfaces)
+        print_resultado(True, f"override.conf corrigido → af-packet ativo ({ifaces_str}).")
     except Exception as e:
         print_resultado(False, f"Não consegui corrigir override.conf: {e}")
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 10 — REINICIAR
@@ -958,9 +965,19 @@ def _reiniciar_servico() -> tuple:
     run_cmd("systemctl enable --now suricata")
     run_cmd("systemctl restart suricata")
 
+    # Aguarda até 15s — o Suricata demora para carregar 64k regras ET Open
+    linha_texto("  Aguardando Suricata inicializar (até 15s)...", C_DIM)
+    for _ in range(15):
+        time.sleep(1)
+        code, out, _ = run_cmd("systemctl is-active suricata")
+        status = out.strip()
+        if status == "active":
+            return True, "active"
+        if status == "failed":
+            break
+
     code, out, _ = run_cmd("systemctl is-active suricata")
     status = out.strip()
-
     if code == 0 and status == "active":
         return True, "active"
     return False, status or "inativo"
