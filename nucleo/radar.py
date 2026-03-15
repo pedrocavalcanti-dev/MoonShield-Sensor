@@ -3,23 +3,46 @@
 nucleo/radar.py - Motor do radar ASCII. Importado por monitoramento.py.
 Standalone: python3 -m nucleo.radar
 """
-import math, time, random, sys
+import math, time, random, sys, os
 
-W=55; H=27; CX=W//2; CY=H//2; AY=0.52; RADIUS=min(CX,CY-1)
-SWEEP_DEG=4.0; TRAIL_DEG=55; TRAIL_LVL=7
-PING_LIFE=28; PING_CHARS=['+','x','*','●','◆']
-NOISE_D=0.012; NOISE_LIFE=6
+# ══════════════════════════════════════════════════════════════════════════════
+# DIMENSÕES — compacto, círculo bem proporcionado
+# ══════════════════════════════════════════════════════════════════════════════
+W=51; H=23; CX=W//2; CY=H//2
+AY=0.48          # aspect ratio Linux terminal (chars ~2.08:1)
+RADIUS=min(CX,CY-1)
 
-_R='\033[0m'
+SWEEP_DEG  = 4.5   # velocidade
+TRAIL_DEG  = 80    # rastro mais longo → mais cinematográfico
+TRAIL_LVL  = 8
+PING_LIFE  = 32
+PING_CHARS = ['+','x','*','●','◆']
+NOISE_LIFE = 5
+WAVE_MAX   = 3     # máx de ondas de impacto simultâneas
+WAVE_LIFE  = 8     # duração da onda em ticks
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PALETA — sem _b() (bold) para evitar escape vazando no scroll
+# ══════════════════════════════════════════════════════════════════════════════
+_R = '\033[0m'
 def _fg(n): return f'\033[38;5;{n}m'
-def _b():   return '\033[1m'
 
-SWEEP_PAL=[_b()+_fg(46),_fg(46),_fg(40),_fg(34),_fg(28),_fg(22),_fg(236)]
-PING_PAL=[_b()+_fg(226),_b()+_fg(220),_fg(214),_fg(208),_fg(166),_fg(130),_fg(236)]
+# Sweep: neon → escurecendo
+SWEEP_PAL = [_fg(82),_fg(46),_fg(40),_fg(34),_fg(28),_fg(22),_fg(237),_fg(235)]
+
+# Pings: amarelo brilhante → laranja → apagando
+PING_PAL  = [_fg(226),_fg(220),_fg(214),_fg(208),_fg(166),_fg(130),_fg(237)]
+
+# Ondas de impacto: ciano pulsante
+WAVE_PAL  = [_fg(51),_fg(45),_fg(39),_fg(33),_fg(27),_fg(237)]
+
 C_RING_O=_fg(22); C_RING_M=_fg(28); C_RING_I=_fg(34)
-C_CROSS=_fg(22);  C_CENTER=_b()+_fg(46); C_OUT=_fg(232)
-C_NOISE=_fg(234); C_DIM=_fg(238); C_NAME=_b()+_fg(40); C_TAG=_fg(28)
+C_CROSS =_fg(22); C_CENTER=_fg(46);  C_OUT=_fg(232)
+C_NOISE =_fg(234);C_DIM=_fg(238);   C_NAME=_fg(40); C_TAG=_fg(28)
 
+# ══════════════════════════════════════════════════════════════════════════════
+# GEOMETRIA
+# ══════════════════════════════════════════════════════════════════════════════
 def _ic(r,c):
     dx=c-CX; dy=(r-CY)/AY
     return dx*dx+dy*dy<=RADIUS*RADIUS
@@ -42,24 +65,47 @@ for _r in range(H):
         elif _r==CY and _c==CX: _CELLS[(_r,_c)]='ctr'
         else:
             d=_dist(_r,_c)/RADIUS
-            if abs(d-.33)<.04 or abs(d-.66)<.03 or abs(d-.99)<.03: _CELLS[(_r,_c)]='ring'
-            elif _r==CY or _c==CX: _CELLS[(_r,_c)]='cross'
-            else: _CELLS[(_r,_c)]='fill'
+            if abs(d-.33)<.04 or abs(d-.66)<.03 or abs(d-.99)<.03:
+                _CELLS[(_r,_c)]='ring'
+            elif _r==CY or _c==CX:
+                _CELLS[(_r,_c)]='cross'
+            else:
+                _CELLS[(_r,_c)]='fill'
 
 _FILL=[(r,c) for (r,c),k in _CELLS.items() if k=='fill']
-_st={"tick":0,"angle":0.0,"pings":[],"noise":[]}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ESTADO
+# ══════════════════════════════════════════════════════════════════════════════
+_st={
+    "tick":0, "angle":0.0,
+    "pings":[],   # {r,c,age,ch}
+    "noise":[],   # {r,c,age}
+    "waves":[],   # {cr,cc,age}  — ondas de impacto
+    "event_count":0,  # total de alertas reais recebidos
+}
 
 def _tick():
-    s=_st; s["tick"]+=1; s["angle"]=(s["angle"]+SWEEP_DEG)%360
+    s=_st; s["tick"]+=1
+    s["angle"]=(s["angle"]+SWEEP_DEG)%360
+
+    # pings envelhecem + pulso: age par = char normal, ímpar = '·' (pisca)
     s["pings"]=[p for p in s["pings"] if p["age"]<PING_LIFE]
     for p in s["pings"]: p["age"]+=1
+
+    # ruído — densidade cresce com eventos recebidos (máx 0.04)
+    nd=min(0.012+s["event_count"]*0.001, 0.04)
     s["noise"]=[n for n in s["noise"] if n["age"]<NOISE_LIFE]
     for n in s["noise"]: n["age"]+=1
-    for r,c in random.sample(_FILL,min(8,len(_FILL))):
-        if random.random()<NOISE_D: s["noise"].append({"r":r,"c":c,"age":0})
+    for r,c in random.sample(_FILL,min(10,len(_FILL))):
+        if random.random()<nd: s["noise"].append({"r":r,"c":c,"age":0})
+
+    # ondas de impacto envelhecem
+    s["waves"]=[w for w in s["waves"] if w["age"]<WAVE_LIFE]
+    for w in s["waves"]: w["age"]+=1
 
 def add_ping(r=None,c=None):
-    """Adiciona ping. Chamado pelo monitoramento em alertas reais."""
+    """Chamado pelo monitoramento em alertas reais do Suricata."""
     ang=_st["angle"]
     if r is None:
         for _ in range(60):
@@ -67,68 +113,141 @@ def add_ping(r=None,c=None):
             if (ang-_ang(cr,cc))%360<12: r,c=cr,cc; break
         else: r,c=random.choice(_FILL)
     _st["pings"].append({"r":r,"c":c,"age":0,"ch":random.choice(PING_CHARS)})
+    # dispara onda de impacto
+    if len(_st["waves"])<WAVE_MAX:
+        _st["waves"].append({"cr":r,"cc":c,"age":0})
+    _st["event_count"]+=1
 
+# ══════════════════════════════════════════════════════════════════════════════
+# RENDER — retorna lista de H strings ANSI
+# ══════════════════════════════════════════════════════════════════════════════
 def get_radar_lines():
     _tick()
     sweep=_st["angle"]
     pmap={(p["r"],p["c"]):p for p in _st["pings"]}
     nset={(n["r"],n["c"]) for n in _st["noise"]}
+
+    # células tocadas por ondas de impacto → {(r,c): intensidade 0..1}
+    wave_cells={}
+    for wv in _st["waves"]:
+        # raio da onda cresce com a idade, aspect corrigido
+        wr=(wv["age"]+1)*1.6
+        wi=wv["age"]/WAVE_LIFE   # 0=recém-criada, 1=morrendo
+        for r in range(H):
+            for c in range(W):
+                if _CELLS[(r,c)] in ('fill','ring','cross'):
+                    dx=c-wv["cc"]; dy=(r-wv["cr"])/AY
+                    d=math.sqrt(dx*dx+dy*dy)
+                    if abs(d-wr)<1.2:
+                        wave_cells[(r,c)]=max(wave_cells.get((r,c),0),1-wi)
+
     lines=[]
     for r in range(H):
         seg=""; pc=None
-        def w(col,ch,_seg=None,_pc=None):
+        def w(col,ch):
             nonlocal seg,pc
             if col!=pc: seg+=_R+col; pc=col
             seg+=ch
+
         for c in range(W):
             k=_CELLS[(r,c)]
-            if k=='out':  w(C_OUT,' ');   continue
+            if k=='out':  w(C_OUT,' ');    continue
             if k=='ctr':  w(C_CENTER,'+'); continue
+
+            # ping com pulso (pisca no age ímpar)
             if (r,c) in pmap:
-                p=pmap[(r,c)]; i=min(p["age"]*len(PING_PAL)//PING_LIFE,len(PING_PAL)-1)
-                w(PING_PAL[i],p["ch"]); continue
+                p=pmap[(r,c)]
+                pi=min(p["age"]*len(PING_PAL)//PING_LIFE, len(PING_PAL)-1)
+                ch=p["ch"] if p["age"]%3!=1 else '·'
+                w(PING_PAL[pi],ch); continue
+
+            # onda de impacto
+            if (r,c) in wave_cells:
+                wi=wave_cells[(r,c)]
+                wpi=min(int((1-wi)*len(WAVE_PAL)), len(WAVE_PAL)-1)
+                w(WAVE_PAL[wpi],'·'); continue
+
+            # sweep + rastro
             diff=(sweep-_ang(r,c))%360
             if diff<=TRAIL_DEG:
                 lvl=int(diff/TRAIL_DEG*(TRAIL_LVL-1))
-                ch=('·' if k=='ring' else ('─' if r==CY else '│') if k=='cross' else ['█','▓','▒','░','·','·',' '][lvl])
+                if k=='ring':  ch='·'
+                elif k=='cross': ch='─' if r==CY else '│'
+                else: ch=['█','▓','▓','▒','░','░','·',' '][lvl]
                 w(SWEEP_PAL[lvl],ch); continue
+
+            # ruído
             if (r,c) in nset: w(C_NOISE,'·'); continue
-            if k=='ring':  w(_rcol(r,c),'·')
+
+            # estrutura base
+            if k=='ring':   w(_rcol(r,c),'·')
             elif k=='cross': w(C_CROSS,'─' if r==CY else '│')
-            else: w(C_OUT,' ')
+            else:            w(C_OUT,' ')
+
         lines.append(seg+_R)
     return lines
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ASSINATURA — 3 linhas (sem linha vazia extra para não duplicar)
+# ══════════════════════════════════════════════════════════════════════════════
 def get_signature_lines():
-    sep=C_DIM+'·'*W+_R
     nl='── P . C a v a l c a n t i ──'
     tl='network sensor  //  MoonShield'
-    return [sep, C_NAME+' '*((W-len(nl))//2)+nl+_R, C_TAG+' '*((W-len(tl))//2)+tl+_R, '']
+    sep=C_DIM+'·'*W+_R
+    return [
+        sep,
+        C_NAME+' '*((W-len(nl))//2)+nl+_R,
+        C_TAG +' '*((W-len(tl))//2)+tl+_R,
+    ]
 
-TOTAL_LINES = H + 4
+TOTAL_LINES = H + 3   # H radar + 3 assinatura (sem linha vazia)
 
+# ══════════════════════════════════════════════════════════════════════════════
+# STANDALONE
+# ══════════════════════════════════════════════════════════════════════════════
 def _run():
+    # ANSI Windows
     try:
-        import ctypes; k=ctypes.windll.kernel32; k.SetConsoleMode(k.GetStdHandle(-11),7)
+        import ctypes; k=ctypes.windll.kernel32  # type: ignore
+        k.SetConsoleMode(k.GetStdHandle(-11),7)
     except Exception: pass
+
     out=sys.stdout
+
+    # Desativa scroll com mouse e eventos de mouse (evita ^[[B no scroll)
+    out.write('\033[?1049h')   # tela alternativa
+    out.write('\033[?25l')     # esconde cursor
+    out.write('\033[?1000l')   # desativa mouse click
+    out.write('\033[?1002l')   # desativa mouse motion
+    out.write('\033[?1015l')   # desativa mouse urxvt
+    out.write('\033[?1006l')   # desativa mouse sgr
+    out.write('\033[2J\033[H')
+    out.flush()
+
     ttl='M O O N S H I E L D   R A D A R'
-    pad=' '*((W-len(ttl))//2); bdr='─'*W
-    out.write('\033[?1049h\033[?25l\033[2J\033[H'); out.flush()
+    pad=' '*((W-len(ttl))//2)
+    bdr=C_DIM+'─'*W+_R
+
     for _ in range(3): add_ping()
     t=0
     try:
         while True:
-            buf=['\033[H','\033[2K'+C_DIM+pad+bdr+_R,'\033[2K'+C_NAME+pad+ttl+_R,'\033[2K'+C_DIM+pad+bdr+_R]
+            buf=['\033[H']
+            buf.append('\033[2K'+bdr)
+            buf.append('\033[2K'+C_NAME+pad+ttl+_R)
+            buf.append('\033[2K'+bdr)
             buf+=['\033[2K'+l for l in get_radar_lines()]
             buf+=['\033[2K'+l for l in get_signature_lines()]
-            buf.append('\033[2K'+C_DIM+' '*((W-16)//2)+'Ctrl+C para sair'+_R)
-            out.write('\n'.join(buf)); out.flush()
+            out.write('\n'.join(buf))
+            out.flush()
             t+=1
-            if t%60==0: add_ping()
+            if t%70==0: add_ping()
             time.sleep(0.05)
     except KeyboardInterrupt: pass
-    finally: out.write('\033[?25h\033[?1049l'); out.flush()
+    finally:
+        out.write('\033[?25h')
+        out.write('\033[?1049l')
+        out.flush()
 
 if __name__=='__main__':
     _run()
