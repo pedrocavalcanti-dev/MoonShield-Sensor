@@ -37,12 +37,10 @@ C_RING_M  = _fg(28)
 C_RING_I  = _fg(34)
 C_CROSS   = _fg(22)
 C_CENTER  = _fg(46)
-# Borda externa — 2 camadas, mais brilhante
-C_EDGE_O  = _fg(46)   # camada externa — verde neon
-C_EDGE_I  = _fg(40)   # camada interna da borda
-# Fundo do radar — levemente esverdeado
-C_BG_IN   = _fg(22)+_bg(233)   # dentro do círculo
+C_EDGE_O  = _fg(46)
+C_EDGE_I  = _fg(40)
 C_OUT     = _fg(232)
+C_BG_IN   = _fg(232)  # preto limpo dentro do círculo (igual fora)
 C_NOISE   = _fg(234)
 C_DIM     = _fg(238)
 C_NAME    = _fg(40)
@@ -51,14 +49,13 @@ C_HUD     = _fg(238)
 C_HUD_V   = _fg(34)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# NOME ASCII — "P.Cavalcanti" corrigido (P claramente P)
-# fonte manual garantindo curva do P visível
+# NOME ASCII — P.Cavalcanti, 4 linhas, max 50 chars, P com curva fechada
 # ══════════════════════════════════════════════════════════════════════════════
 _NAME_ART = [
-    r" ___  ___             _              _   _",
-    r"| _ \/ __|__ ___ __  | |__ __ _ _ _ | |_(_)",
-    r"|  _/ (__/ _` \ V /  | / _/ _` | ' \|  _| |",
-    r"|_|  \___\__,_|\_/   |_\__\__,_|_||_|\__|_|",
+    r" ___    ___               _             _   _ ",
+    r"| _ \  / __|__ ___ ____ _| |__ __ _ _ _| |_(_)",
+    r"|  _/ | (__/ _` \ V / _` | / _/ _` | ' \  _| |",
+    r"|_|    \___\__,_|\_/\__,_|_\__\__,_|_||_\__|_|",
 ]
 
 def _center(s, width):
