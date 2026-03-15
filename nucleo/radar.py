@@ -55,11 +55,10 @@ C_HUD_V   = _fg(34)
 # fonte manual garantindo curva do P visível
 # ══════════════════════════════════════════════════════════════════════════════
 _NAME_ART = [
-    r" ____  ____                   _                _   _ ",
-    r"|  _ \/ ___|__ ___   ____ _  | | ___ __ _ _ _ | |_(_)",
-    r"| |_) \___ / _` \ \ / / _` | | |/ __/ _` | ' \|  _| |",
-    r"|  __/ ___| (_| |\ V / (_| | | | (_| (_| | | | | |_| |",
-    r"|_|   |____\__,_| \_/ \__,_| |_|\___\__,_|_| |_|\__|_|",
+    r" ___  ___             _              _   _",
+    r"| _ \/ __|__ ___ __  | |__ __ _ _ _ | |_(_)",
+    r"|  _/ (__/ _` \ V /  | / _/ _` | ' \|  _| |",
+    r"|_|  \___\__,_|\_/   |_\__\__,_|_||_|\__|_|",
 ]
 
 def _center(s, width):
@@ -259,7 +258,7 @@ def get_signature_lines():
 
 # H radar + 2 HUD + 1 sep + 5 nome + 1 tagline = H+9
 # mas get_signature_lines = 1+5+1 = 7, HUD não conta no TOTAL (injetado fora)
-TOTAL_LINES = H + 7
+TOTAL_LINES = H + 6   # H radar + sep + 4 nome + tagline
 
 def get_hud_top(): return _hud_top()
 def get_hud_bot(): return _hud_bot()

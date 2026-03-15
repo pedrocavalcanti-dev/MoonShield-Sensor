@@ -322,16 +322,13 @@ def _loop_display(cfg: dict, _stop: threading.Event = None):
         # ── tamanho do terminal ───────────────────────────────────────────────
         try:
             ts = os.get_terminal_size()
-            t_cols, t_rows = ts.columns, ts.lines
+            t_cols = ts.columns
         except Exception:
-            t_cols, t_rows = 999, 999
+            t_cols = 999
 
-        # Mínimo necessário: painel stats + 3 espaço + largura radar
-        # radar.W = 63, _LW = 36, gap = 3  → total = 102 colunas
-        # altura: _TOTAL linhas + 1 título
+        # Só verifica colunas — linhas não importam (terminal rola)
         NEED_COLS = _LW + 3 + (_radar.W if _RADAR_OK else 63)
-        NEED_ROWS = _TOTAL + 1
-        radar_visivel = (t_cols >= NEED_COLS and t_rows >= NEED_ROWS)
+        radar_visivel = (t_cols >= NEED_COLS)
 
         # ── coluna direita: radar ou aviso de janela pequena ──────────────────
         if _RADAR_OK and radar_visivel:
