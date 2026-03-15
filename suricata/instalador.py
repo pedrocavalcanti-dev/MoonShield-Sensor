@@ -113,6 +113,7 @@ def executar_instalacao(cfg: dict) -> dict:
         return cfg
 
     print_resultado(True, "suricata -T → configuração válida.")
+    _corrigir_override_systemd(yaml_path)   
 
     ok, msg = _reiniciar_servico()
     if ok:
@@ -921,6 +922,29 @@ def _testar_suricata(yaml_path: Path) -> tuple:
         linha_texto(f"    {e}", C_ERRO)
     return False, erros[0]
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 9b — CORRIGIR OVERRIDE SYSTEMD
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _corrigir_override_systemd(yaml_path: Path) -> None:
+    """
+    O apt cria /etc/systemd/system/suricata.service.d/override.conf
+    com --pcap=<iface> hardcoded, ignorando o af-packet do yaml.
+    Este método sobrescreve o override para usar apenas o yaml.
+    """
+    override = Path("/etc/systemd/system/suricata.service.d/override.conf")
+    try:
+        override.parent.mkdir(parents=True, exist_ok=True)
+        override.write_text(
+            "[Service]\n"
+            "ExecStart=\n"
+            f"ExecStart=/usr/bin/suricata -D -c {yaml_path} --pidfile /run/suricata.pid\n"
+        )
+        run_cmd("systemctl daemon-reload")
+        print_resultado(True, "override.conf corrigido → af-packet ativo.")
+    except Exception as e:
+        print_resultado(False, f"Não consegui corrigir override.conf: {e}")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 10 — REINICIAR
