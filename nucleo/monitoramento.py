@@ -268,11 +268,39 @@ def _loop_display(cfg: dict, _stop: threading.Event = None):
         while len(left) < _TOTAL: left.append(blank())
         left = left[:_TOTAL]
 
-        # ── coluna direita: radar ─────────────────────────────────────────────
-        if _RADAR_OK:
+        # ── tamanho do terminal ───────────────────────────────────────────────
+        try:
+            ts = os.get_terminal_size()
+            t_cols, t_rows = ts.columns, ts.lines
+        except Exception:
+            t_cols, t_rows = 999, 999
+
+        # Mínimo necessário: painel stats + 3 espaço + largura radar
+        # radar.W = 63, _LW = 36, gap = 3  → total = 102 colunas
+        # altura: _TOTAL linhas + 1 título
+        NEED_COLS = _LW + 3 + (_radar.W if _RADAR_OK else 63)
+        NEED_ROWS = _TOTAL + 1
+        radar_visivel = (t_cols >= NEED_COLS and t_rows >= NEED_ROWS)
+
+        # ── coluna direita: radar ou aviso de janela pequena ──────────────────
+        if _RADAR_OK and radar_visivel:
             right = _radar.get_radar_lines() + _radar.get_signature_lines()
+        elif _RADAR_OK and not radar_visivel:
+            # Avisa quantas colunas/linhas faltam
+            dc = max(0, NEED_COLS - t_cols)
+            dr = max(0, NEED_ROWS - t_rows)
+            msg1 = '[ janela pequena ]'
+            msg2 = f'aumente {dc}c / {dr}l' if (dc or dr) else 'redimensione'
+            right = [
+                C_D + msg1 + _R,
+                C_D + msg2 + _R,
+            ]
+            # ainda toca o tick do radar pra não pausar a animação
+            if _RADAR_OK:
+                try: _radar._tick()
+                except Exception: pass
         else:
-            right = ['  (nucleo/radar.py nao encontrado)'] + ['']*(_TOTAL-1)
+            right = [C_D + '(radar.py nao encontrado)' + _R]
 
         while len(right) < _TOTAL: right.append('')
         right = right[:_TOTAL]
