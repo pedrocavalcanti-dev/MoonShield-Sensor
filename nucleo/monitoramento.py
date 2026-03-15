@@ -107,7 +107,8 @@ def _enable_ansi_windows():
 def _key_reader(stop_event):
     """
     Thread que lê stdin em modo raw.
-    Ctrl+C (\x03), Ctrl+X (\x18) ou 'q' param o sensor e voltam ao menu.
+    Ctrl+X (\x18) para o sensor e volta ao menu.
+    Ctrl+C fica passando normalmente (levanta KeyboardInterrupt no loop principal).
     """
     import select, termios, tty
     fd = sys.stdin.fileno()
@@ -117,16 +118,17 @@ def _key_reader(stop_event):
         return
     def _r():
         try:
-            tty.setraw(fd)
+            # cbreak em vez de raw: processa Ctrl+C normalmente como SIGINT
+            tty.setcbreak(fd)
             while not stop_event.is_set():
                 r,_,_ = select.select([sys.stdin],[],[],0.1)
                 if r:
                     ch = sys.stdin.read(1)
-                    if ch in ('\x03','\x18','\x04','q','Q'):
+                    if ch == '\x18':   # só Ctrl+X
                         stop_event.set()
                         break
         except Exception:
-            stop_event.set()
+            pass
         finally:
             try: termios.tcsetattr(fd, termios.TCSADRAIN, old)
             except Exception: pass
@@ -260,7 +262,7 @@ def _loop_display(cfg: dict, _stop: threading.Event = None):
             box(f"Último    : {ultimo}",            C_D),   # 16
             box(f"HTTP      : {us}",                C_D),   # 17
             sep(),                                           # 18
-            box('Ctrl+C para parar',                C_D),   # 19
+            box('Ctrl+X para parar',                C_D),   # 19
             row('╚'+'═'*(W-2)+'╝',                C_D),   # 20
         ]
         while len(left) < _TOTAL: left.append(blank())
