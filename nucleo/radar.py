@@ -34,6 +34,21 @@ WAVE_PAL  = [_fg(51),_fg(45),_fg(39),_fg(33),_fg(27),_fg(237)]
 C_RING_O=_fg(22); C_RING_M=_fg(28); C_RING_I=_fg(34)
 C_CROSS =_fg(22); C_CENTER=_fg(46);  C_OUT=_fg(232)
 C_NOISE =_fg(234);C_DIM=_fg(238);   C_NAME=_fg(40); C_TAG=_fg(28)
+C_HUD   =_fg(238); C_HUD_V=_fg(34)  # HUD ao redor do radar
+
+# ══════════════════════════════════════════════════════════════════════════════
+# NOME EM ASCII — P.Cavalcanti fonte "small" 3 linhas, centralizado em W
+# ══════════════════════════════════════════════════════════════════════════════
+_NAME_ART = [
+    r" ___    ___               _              _   _ ",
+    r"|  _ \ / __|__ ___ ____ _| |__ __ _ _ _ | |_(_)",
+    r"| |_) | (__/ _` \ V / _` | / _/ _` | ' \|  _| |",
+    r"|____/ \___\__,_|\_/\__,_|_\__\__,_|_||_|\__|_|",
+]
+
+def _center(s, width):
+    pad = max(0, (width - len(s)) // 2)
+    return ' ' * pad + s
 
 # ══════════════════════════════════════════════════════════════════════════════
 # GEOMETRIA
@@ -92,7 +107,6 @@ def _tick():
     for w in s["waves"]: w["age"]+=1
 
 def add_ping(r=None,c=None):
-    """Chamado pelo monitoramento em alertas reais."""
     ang=_st["angle"]
     if r is None:
         for _ in range(60):
@@ -105,7 +119,36 @@ def add_ping(r=None,c=None):
     _st["event_count"]+=1
 
 # ══════════════════════════════════════════════════════════════════════════════
-# RENDER
+# HUD — linhas acima/abaixo do radar com azimute, contatos e coord fictícias
+# ══════════════════════════════════════════════════════════════════════════════
+def _hud_top():
+    az   = int(_st["angle"])
+    cont = len(_st["pings"])
+    ev   = _st["event_count"]
+    left  = f'AZ:{az:03d}°'
+    mid   = f'CONTACTS:{cont}'
+    right = f'EVT:{ev}'
+    # distribui os 3 campos ao longo de W chars
+    gap1 = (W - len(left) - len(mid) - len(right)) // 2
+    gap2 =  W - len(left) - len(mid) - len(right) - gap1
+    return C_HUD + left + ' '*gap1 + C_HUD_V + mid + C_HUD + ' '*gap2 + right + _R
+
+def _hud_bot():
+    # coordenadas que derivam levemente do tick para parecer vivas
+    t    = _st["tick"]
+    lat  = 23.0 + math.sin(t * 0.003) * 0.05
+    lon  = 41.0 + math.cos(t * 0.002) * 0.05
+    ns   = 'S' if lat < 0 else 'N'
+    ew   = 'W' if lon < 0 else 'E'
+    coord= f'{ns}{abs(lat):06.3f}  {ew}{abs(lon):06.3f}'
+    mode = 'SCAN'
+    left  = f'MODE:{mode}'
+    right = f'POS:{coord}'
+    gap   = W - len(left) - len(right)
+    return C_HUD + left + ' '*max(1,gap) + right + _R
+
+# ══════════════════════════════════════════════════════════════════════════════
+# RENDER — retorna lista de linhas ANSI
 # ══════════════════════════════════════════════════════════════════════════════
 def get_radar_lines():
     _tick()
@@ -159,55 +202,52 @@ def get_radar_lines():
         lines.append(seg+_R)
     return lines
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ASSINATURA — separador + nome ASCII + tagline
+# Ordem: sep · HUD top · radar · HUD bot · sep · nome ASCII · tagline
+# ══════════════════════════════════════════════════════════════════════════════
 def get_signature_lines():
-    nl='── P . C a v a l c a n t i ──'
-    tl='network sensor  //  MoonShield'
-    sep=C_DIM+'·'*W+_R
-    return [
-        sep,
-        C_NAME+' '*((W-len(nl))//2)+nl+_R,
-        C_TAG +' '*((W-len(tl))//2)+tl+_R,
-    ]
+    sep = C_DIM + '·'*W + _R
+    tl  = 'network sensor  //  MoonShield'
+    out = [sep]
+    for line in _NAME_ART:
+        out.append(C_NAME + _center(line, W) + _R)
+    out.append(C_TAG + _center(tl, W) + _R)
+    return out
 
-TOTAL_LINES = H + 3
+# get_radar_lines retorna H linhas
+# get_signature_lines retorna 1 + 4 + 1 = 6 linhas
+# HUD top e bot são injetados no standalone e no monitoramento via get_hud_*
+TOTAL_LINES = H + 6   # radar + assinatura (sem HUD — monitoramento não usa HUD)
+
+def get_hud_top(): return _hud_top()
+def get_hud_bot(): return _hud_bot()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# LEITOR DE TECLA — thread separada, não bloqueia o loop principal
-# Retorna 'q' para Ctrl+C (^C = \x03) ou Ctrl+X (^X = \x18)
+# KEY READER
 # ══════════════════════════════════════════════════════════════════════════════
 def _start_key_reader(stop_event):
-    """
-    Lê stdin em modo raw numa thread separada.
-    Seta stop_event se receber Ctrl+C (\x03) ou Ctrl+X (\x18).
-    """
-    import os
     fd = sys.stdin.fileno()
     try:
         old = termios.tcgetattr(fd)
     except Exception:
-        return   # não é um tty (ex: pipe), ignora
-
+        return
     def _reader():
         try:
             tty.setraw(fd)
+            import select
             while not stop_event.is_set():
-                # select para não bloquear para sempre
-                import select
                 r,_,_ = select.select([sys.stdin],[],[],0.1)
                 if r:
                     ch = sys.stdin.read(1)
                     if ch in ('\x03','\x18','\x04','q','Q'):
-                        stop_event.set()
-                        break
+                        stop_event.set(); break
         except Exception:
             stop_event.set()
         finally:
             try: termios.tcsetattr(fd, termios.TCSADRAIN, old)
             except Exception: pass
-
-    t = threading.Thread(target=_reader, daemon=True)
-    t.start()
-    return t
+    threading.Thread(target=_reader, daemon=True).start()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # STANDALONE
@@ -218,14 +258,12 @@ def _run():
         k.SetConsoleMode(k.GetStdHandle(-11),7)
     except Exception: pass
 
-    out=sys.stdout
-    stop=threading.Event()
-
+    out=sys.stdout; stop=threading.Event()
     out.write('\033[?1049h\033[?25l\033[?1000l\033[?1002l\033[?1006l\033[2J\033[H')
     out.flush()
 
     ttl='M O O N S H I E L D   R A D A R'
-    pad=' '*((W-len(ttl))//2)
+    pad=_center(ttl,W)
     bdr=C_DIM+'─'*W+_R
 
     _start_key_reader(stop)
@@ -235,9 +273,11 @@ def _run():
         while not stop.is_set():
             buf=['\033[H',
                  '\033[2K'+bdr,
-                 '\033[2K'+C_NAME+pad+ttl+_R,
-                 '\033[2K'+bdr]
+                 '\033[2K'+C_NAME+_center(ttl,W)+_R,
+                 '\033[2K'+bdr,
+                 '\033[2K'+get_hud_top()]
             buf+=['\033[2K'+l for l in get_radar_lines()]
+            buf.append('\033[2K'+get_hud_bot())
             buf+=['\033[2K'+l for l in get_signature_lines()]
             out.write('\n'.join(buf)); out.flush()
             t+=1

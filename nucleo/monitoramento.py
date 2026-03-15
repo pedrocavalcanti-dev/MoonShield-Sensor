@@ -205,7 +205,7 @@ def tela_sensor(cfg: dict):
 _SPIN  = ['◐', '◓', '◑', '◒']
 _LW    = 36
 
-_TOTAL = (_radar.TOTAL_LINES if _RADAR_OK else 31)
+_TOTAL = (_radar.TOTAL_LINES + 2 if _RADAR_OK else 33)
 
 # ── Uptime e histograma ───────────────────────────────────────────────────────
 _session_start  = None          # setado em tela_sensor
@@ -335,7 +335,12 @@ def _loop_display(cfg: dict, _stop: threading.Event = None):
 
         # ── coluna direita: radar ou aviso de janela pequena ──────────────────
         if _RADAR_OK and radar_visivel:
-            right = _radar.get_radar_lines() + _radar.get_signature_lines()
+            right = (
+                [_radar.get_hud_top()] +
+                _radar.get_radar_lines() +
+                [_radar.get_hud_bot()] +
+                _radar.get_signature_lines()
+            )
         elif _RADAR_OK and not radar_visivel:
             # Avisa quantas colunas/linhas faltam
             dc = max(0, NEED_COLS - t_cols)
