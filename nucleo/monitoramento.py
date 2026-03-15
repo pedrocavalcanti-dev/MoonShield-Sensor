@@ -158,6 +158,11 @@ def tela_sensor(cfg: dict):
                         "ultimo":"—","heartbeats":0,"login_ok":False,
                         "rodando":True,"ultimo_status":"—"})
 
+    global _session_start, _hist_enviados, _hist_last_sent
+    _session_start  = time.time()
+    _hist_enviados  = []
+    _hist_last_sent = 0
+
     _enable_ansi_windows()
 
     import sys
@@ -198,11 +203,40 @@ def tela_sensor(cfg: dict):
 # ══════════════════════════════════════════════════════════════════════════════
 
 _SPIN  = ['◐', '◓', '◑', '◒']
-_LW    = 36    # largura do painel de stats
+_LW    = 36
 
-# Número de linhas que o radar ocupa (H + 4 da assinatura).
-# Se radar não disponível, usamos esse valor como fallback.
 _TOTAL = (_radar.TOTAL_LINES if _RADAR_OK else 31)
+
+# ── Uptime e histograma ───────────────────────────────────────────────────────
+_session_start  = None          # setado em tela_sensor
+_hist_enviados  = []            # últimos N valores de 'sent' para o histograma
+_hist_last_sent = 0             # último valor de sent visto
+_HIST_BARS      = 20            # quantas colunas no histograma
+_HIST_CHARS     = ' ▁▂▃▄▅▆▇█'  # 9 níveis
+
+def _uptime_str():
+    if _session_start is None: return '00:00:00'
+    s = int(time.time() - _session_start)
+    return f'{s//3600:02d}:{(s%3600)//60:02d}:{s%60:02d}'
+
+def _update_hist(sent):
+    global _hist_last_sent
+    delta = max(0, sent - _hist_last_sent)
+    _hist_last_sent = sent
+    _hist_enviados.append(delta)
+    if len(_hist_enviados) > _HIST_BARS:
+        _hist_enviados.pop(0)
+
+def _render_hist(W):
+    """Retorna string do histograma com W-4 chars de largura."""
+    inner = W - 4
+    bars  = (_hist_enviados or [0])[-inner:]
+    mx    = max(bars) if max(bars) > 0 else 1
+    out   = ''
+    for v in bars:
+        idx = int(v / mx * (len(_HIST_CHARS) - 1))
+        out += _HIST_CHARS[idx]
+    return out.ljust(inner)
 
 
 def _loop_display(cfg: dict, _stop: threading.Event = None):
@@ -242,6 +276,15 @@ def _loop_display(cfg: dict, _stop: threading.Event = None):
         def sep(l='╠',r='╣'): return row(l+'═'*(W-2)+r, C_D)
         def blank(): return row('║'+' '*(W-2)+'║', C_D)
 
+        # ── uptime e histograma ───────────────────────────────────────────────
+        _update_hist(sent)
+        uptime_s  = _uptime_str()
+        hist_s    = _render_hist(W)
+        # threat level baseado em erros e frequência de eventos
+        if erros > 5:              threat='HIGH'; t_cor=C_ER
+        elif sent > 500:           threat='MED';  t_cor=C_AV
+        else:                      threat='LOW';  t_cor=C_OK
+
         # ── painel esquerdo — exatamente _TOTAL linhas ────────────────────────
         left = [
             row('╔'+'═'*(W-2)+'╗',                C_D),   # 1
@@ -263,9 +306,17 @@ def _loop_display(cfg: dict, _stop: threading.Event = None):
             box(f"HTTP      : {us}",                C_D),   # 17
             sep(),                                           # 18
             box('Ctrl+X para parar',                C_D),   # 19
-            row('╚'+'═'*(W-2)+'╝',                C_D),   # 20
+            sep('╠','╣'),                                    # 20
+            box(f"Uptime    : {uptime_s}",          C_D),   # 21
+            box(f"Threat    : {threat}",            t_cor), # 22
+            sep('╠','╣'),                                    # 23
+            box('eventos/lote',                     C_D),   # 24
+            row(f"║  {hist_s}║",                   C_OK),  # 25
+            sep('╠','╣'),                                    # 26
         ]
-        while len(left) < _TOTAL: left.append(blank())
+        # preenche restante até _TOTAL-1 com blank, fecha com ╚
+        while len(left) < _TOTAL - 1: left.append(blank())
+        left.append(row('╚'+'═'*(W-2)+'╝', C_D))
         left = left[:_TOTAL]
 
         # ── tamanho do terminal ───────────────────────────────────────────────
