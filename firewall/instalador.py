@@ -9,6 +9,10 @@ Não toca nas regras existentes do sistema.
 
 Persiste via /etc/nftables.d/moonshield.conf (ou /etc/nftables.conf
 como fallback).
+
+FIX: chain renomeada de 'monitor' para 'ms_forward' —
+     'monitor' é palavra reservada no nftables v1.0+ e causa
+     syntax error ao tentar aplicar as regras.
 ──────────────────────────────────────────────────────────────────────
 """
 
@@ -26,13 +30,14 @@ NOME_TABELA  = "moonshield"
 ARQUIVO_CONF     = Path("/etc/nftables.d/moonshield.conf")
 ARQUIVO_CONF_ALT = Path("/etc/nftables.conf")
 
+# 'monitor' é palavra reservada no nftables — usar 'ms_forward' como nome da chain
 REGRAS = f"""\
 # MoonShield — regras de monitoramento de firewall
-# Gerado automaticamente pelo ms_sensor.py
-# Nao edite manualmente — use a opcao [10] do menu
+# Gerado automaticamente pelo ms_firewall.py
+# Nao edite manualmente — use a opcao [0] do menu
 
 table inet {NOME_TABELA} {{
-    chain monitor {{
+    chain ms_forward {{
         type filter hook forward priority 0; policy accept;
         log prefix "{PREFIXO_LOG}" flags all
     }}
@@ -84,18 +89,15 @@ def instalar_regras() -> tuple[bool, str]:
     if verificar_instalado():
         remover_regras(silencioso=True)
 
-    # Aplica via stdin
-    code, _, err = run_cmd(f"echo '{REGRAS}' | nft -f -")
-    if code != 0:
-        # Tenta via arquivo temporário (algumas distros têm problema com echo+pipe)
-        tmp = "/tmp/ms_fw_rules.nft"
-        try:
-            with open(tmp, "w") as f:
-                f.write(REGRAS)
-            code, _, err = run_cmd(f"nft -f {tmp}")
-        finally:
-            if os.path.exists(tmp):
-                os.remove(tmp)
+    # Grava em arquivo temporário e aplica (mais confiável que echo+pipe)
+    tmp = "/tmp/ms_fw_rules.nft"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(REGRAS)
+        code, _, err = run_cmd(f"nft -f {tmp}")
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
 
     if code != 0:
         return False, f"Erro ao aplicar regras: {err}"
