@@ -7,6 +7,9 @@ Entry point do sensor de firewall MoonShield.
 Lê eventos do nftables via journald em tempo real e envia para o
 painel Django em /firewall/api/ingest/.
 
+Também sincroniza regras: faz poll em /firewall/api/pending-rules/
+a cada 30s e aplica via nft quando há regras pendentes.
+
 Reutiliza config.json do ms_sensor.py — mesmas credenciais e URL.
 Se já configurado pelo IDS, vai direto ao menu.
 
@@ -33,6 +36,7 @@ from nucleo.interface    import (
 from firewall.instalador   import obter_status, instalar_regras
 from firewall.interface    import tela_firewall
 import firewall.monitoramento as fw_mon
+import firewall.sincronizador as fw_sync
 
 # ══════════════════════════════════════════════════════════════════════════════
 # BOOT
@@ -46,6 +50,7 @@ _BOOT_LINES_FW = [
     ("[OK] firewall.instalador        pronto",    "\033[92m\033[1m", 0.02),
     ("[OK] firewall.analisador        pronto",    "\033[92m\033[1m", 0.02),
     ("[OK] firewall.monitoramento     standby",   "\033[92m\033[1m", 0.02),
+    ("[OK] firewall.sincronizador     standby",   "\033[92m\033[1m", 0.02),
     ("Verificando nftables...",                   "\033[37m\033[2m", 0.03),
     ("Conectando ao MOONSHIELD...",               "\033[37m\033[2m", 0.05),
 ]
@@ -127,18 +132,6 @@ def _cabecalho_fw(cfg: dict, verificar: bool = False):
     separador()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# WIZARD — só roda se config.json não existir / não configurado
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _wizard_firewall(cfg: dict) -> dict:
-    """
-    Wizard simplificado — só pede URL e login se ainda não configurado.
-    Se o ms_sensor.py já configurou, pula tudo.
-    """
-    from nucleo.interface import wizard
-    return wizard(cfg)
-
-# ══════════════════════════════════════════════════════════════════════════════
 # MENU PRINCIPAL DO FIREWALL
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -157,8 +150,11 @@ def menu_firewall(cfg: dict):
         tem_senha     = bool(cfg.get("Moon_senha"))
         cred_label    = f"{usuario_atual}  {'[OK]' if tem_senha else '[!!] sem senha'}"
 
-        rodando    = fw_mon.esta_rodando()
-        rodando_tag = "[RODANDO]" if rodando else ""
+        mon_rodando  = fw_mon.esta_rodando()
+        sync_rodando = fw_sync.esta_rodando()
+
+        mon_tag  = "[RODANDO]"  if mon_rodando  else ""
+        sync_tag = "[RODANDO]"  if sync_rodando else ""
 
         linha_texto("  --- Operacao -----------------------------------------------", C_NEON_DIM)
         linha_texto(
@@ -166,8 +162,8 @@ def menu_firewall(cfg: dict):
             C_MENU_TXT if fw_instalado else C_AVISO,
         )
         linha_texto(
-            f"  [1]  >>  Iniciar monitoramento  {rodando_tag}",
-            C_OK if rodando else C_WHITE,
+            f"  [1]  >>  Iniciar monitoramento + sync  {mon_tag}",
+            C_OK if mon_rodando else C_WHITE,
         )
         linha_vazia()
         linha_texto("  --- Firewall -----------------------------------------------", C_NEON_DIM)
@@ -206,7 +202,7 @@ def menu_firewall(cfg: dict):
             sys.exit(0)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TELA DE MONITORAMENTO
+# TELA DE MONITORAMENTO + SINCRONIZADOR
 # ══════════════════════════════════════════════════════════════════════════════
 
 _session      = requests.Session()
@@ -246,6 +242,7 @@ def _tela_monitoramento(cfg: dict):
         linha_vazia()
 
     linha_texto("  Iniciando leitura do journald...", C_DIM)
+    linha_texto("  Iniciando sincronizador de regras (poll 30s)...", C_DIM)
     linha_texto("  Ctrl+C para parar.", C_DIM)
     linha_vazia()
     separador()
@@ -253,18 +250,24 @@ def _tela_monitoramento(cfg: dict):
     global _stop_event
     _stop_event = threading.Event()
 
+    # Inicia monitoramento de logs
     fw_mon.iniciar_monitoramento(cfg, _stop_event, _session, _session_lock)
 
-    # Loop de display simples no terminal
+    # Inicia sincronizador de regras (poll Django → nft)
+    fw_sync.iniciar_sincronizador(cfg, _stop_event, _session, _session_lock)
+
+    # Loop de display no terminal
     try:
         while not _stop_event.is_set():
-            stats = fw_mon.obter_stats()
+            mon_stats  = fw_mon.obter_stats()
+            sync_stats = fw_sync.obter_stats()
             print(
-                f"\r  {C_DIM}vistos: {C_WHITE}{stats['vistos']:>6,}  "
-                f"{C_DIM}enviados: {C_OK}{stats['enviados']:>6,}  "
-                f"{C_DIM}erros: {C_ERRO}{stats['erros']:>4,}  "
-                f"{C_DIM}buffer: {C_WHITE}{stats['buffer']:>3}  "
-                f"{C_DIM}ultimo: {C_WHITE}{stats['ultimo']:<12}{C_NORMAL}",
+                f"\r  {C_DIM}logs→ vistos:{C_WHITE}{mon_stats['vistos']:>6,}  "
+                f"{C_DIM}env:{C_OK}{mon_stats['enviados']:>6,}  "
+                f"{C_DIM}err:{C_ERRO}{mon_stats['erros']:>3,}  "
+                f"{C_DIM}| regras→ polls:{C_WHITE}{sync_stats['aplicacoes']:>3}  "
+                f"{C_DIM}err:{C_ERRO}{sync_stats['erros']:>2}  "
+                f"{C_DIM}ultimo:{C_WHITE}{sync_stats['ultimo_apply']:<10}{C_NORMAL}",
                 end="", flush=True,
             )
             time.sleep(0.5)
@@ -274,55 +277,49 @@ def _tela_monitoramento(cfg: dict):
         if _stop_event:
             _stop_event.set()
         fw_mon.parar_monitoramento()
+        fw_sync.parar_sincronizador()
         print()
-        print_resultado(True, "Monitoramento encerrado.")
+        print_resultado(True, "Monitoramento e sincronizador encerrados.")
         aguardar_enter()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TELAS DE CONFIGURAÇÃO — reutiliza padrão do nucleo/interface.py
+# TELAS DE CONFIGURAÇÃO
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _tela_instalar(cfg: dict):
     from firewall.interface import _tela_instalar as _fw_instalar
     _fw_instalar(cfg)
 
-
 def _tela_status(cfg: dict):
     from firewall.interface import _tela_status as _fw_status
     _fw_status(cfg)
-
 
 def _tela_listar(cfg: dict):
     from firewall.interface import _tela_listar as _fw_listar
     _fw_listar(cfg)
 
-
 def _tela_remover(cfg: dict):
     from firewall.interface import _tela_remover as _fw_remover
     _fw_remover(cfg)
-
 
 def _tela_config_url(cfg: dict) -> dict:
     from nucleo.interface import tela_config_ip
     return tela_config_ip(cfg)
 
-
 def _tela_testar_conexao(cfg: dict):
     from nucleo.interface import tela_testar_conexao
     tela_testar_conexao(cfg)
 
-
 def _tela_ver_config(cfg: dict):
     from nucleo.interface import tela_ver_config
     tela_ver_config(cfg)
-
 
 def _tela_credenciais(cfg: dict) -> dict:
     from nucleo.interface import tela_config_credenciais
     return tela_config_credenciais(cfg)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# AUTENTICAÇÃO — mesma lógica do monitoramento.py do IDS
+# AUTENTICAÇÃO
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _autenticar(cfg: dict) -> bool:
@@ -351,11 +348,11 @@ def _autenticar(cfg: dict) -> bool:
         return False
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MODO --auto
+# MODO --auto  (serviço systemd)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def modo_auto(cfg: dict):
-    print(f"[{agora()}] MoonShield Firewall Sensor v{VERSION} iniciando em modo automatico...")
+    print(f"[{agora()}] MoonShield Firewall Sensor v{VERSION} — modo automatico")
     print(f"[{agora()}] MoonShield : {cfg['Moon_url']}")
     print(f"[{agora()}] Sensor     : {cfg['sensor_nome']}")
 
@@ -366,7 +363,7 @@ def modo_auto(cfg: dict):
     if not fw_status["instalado"]:
         print(f"[{agora()}] ERRO: regras nftables nao instaladas.")
         print(f"[{agora()}] Execute: sudo venv/bin/python3 ms_firewall.py")
-        print(f"[{agora()}] E use a opcao [0] para instalar as regras.")
+        print(f"[{agora()}] Use a opcao [0] para instalar as regras.")
         sys.exit(1)
 
     if cfg.get("Moon_usuario") and cfg.get("Moon_senha"):
@@ -375,17 +372,24 @@ def modo_auto(cfg: dict):
         print(f"[{agora()}] Login {'OK' if ok else 'FALHOU'}")
 
     stop = threading.Event()
+
+    # Inicia monitoramento de logs
     fw_mon.iniciar_monitoramento(cfg, stop, _session, _session_lock)
-    print(f"[{agora()}] Monitoramento iniciado. Ctrl+C para parar.")
+    print(f"[{agora()}] Monitoramento de logs iniciado.")
+
+    # Inicia sincronizador de regras
+    fw_sync.iniciar_sincronizador(cfg, stop, _session, _session_lock)
+    print(f"[{agora()}] Sincronizador de regras iniciado (poll 30s).")
+    print(f"[{agora()}] Ctrl+C para parar.")
 
     def _log_stats():
         while True:
             time.sleep(60)
-            s = fw_mon.obter_stats()
+            m = fw_mon.obter_stats()
+            s = fw_sync.obter_stats()
             print(
-                f"[{agora()}] stats | vistos={s['vistos']} | "
-                f"enviados={s['enviados']} | erros={s['erros']} | "
-                f"ultimo={s['ultimo']}",
+                f"[{agora()}] logs | vistos={m['vistos']} enviados={m['enviados']} erros={m['erros']} | "
+                f"sync | aplicacoes={s['aplicacoes']} erros={s['erros']} ultimo={s['ultimo_apply']}",
                 flush=True,
             )
     threading.Thread(target=_log_stats, daemon=True).start()
@@ -396,6 +400,7 @@ def modo_auto(cfg: dict):
     except KeyboardInterrupt:
         stop.set()
         fw_mon.parar_monitoramento()
+        fw_sync.parar_sincronizador()
         print(f"\n[{agora()}] Encerrado.")
         sys.exit(0)
 
@@ -410,20 +415,16 @@ def main():
 
     cfg = carregar_config()
 
-    # Modo automático (serviço systemd)
     if "--auto" in sys.argv:
         modo_auto(cfg)
         return
 
-    # Boot sequence visual
     _boot_firewall(cfg)
 
-    # Wizard se ainda não configurado
     if not cfg.get("configurado") and not cfg.get("wizard_ok"):
         from nucleo.interface import wizard
         cfg = wizard(cfg)
 
-    # Menu principal do firewall
     menu_firewall(cfg)
 
 
