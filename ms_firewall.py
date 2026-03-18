@@ -146,7 +146,8 @@ def menu_firewall(cfg: dict):
     _primeira_vez = True
 
     while True:
-        _cabecalho_fw(cfg, verificar=_primeira_vez)        _primeira_vez = False
+        _cabecalho_fw(cfg, verificar=_primeira_vez)
+        _primeira_vez = False
 
         fw_status    = obter_status()
         fw_instalado = fw_status["instalado"]
