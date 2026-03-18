@@ -93,12 +93,17 @@ def _loop_firewall(cfg: dict, parar: threading.Event,
                    session, session_lock):
     """
     Lê journalctl -f em tempo real e envia eventos em lotes.
+    Manda heartbeat inicial para registrar o sensor mesmo sem eventos.
     Para quando parar.is_set().
     """
     ingest_url = cfg["Moon_url"].rstrip("/") + INGEST_PATH
     sensor     = cfg["sensor_nome"]
     buffer     = []
     ultimo_env = time.time()
+
+    # ── Heartbeat inicial — registra o sensor no Django imediatamente ────────
+    # Garante que o Sensor aparece nas configurações antes do primeiro evento
+    _enviar(ingest_url, sensor, [], cfg, session, session_lock)
 
     cmd = [
         "journalctl", "-f", "-k", "-o", "short",
@@ -125,7 +130,6 @@ def _loop_firewall(cfg: dict, parar: threading.Event,
             linha = proc.stdout.readline()
 
             if not linha:
-                # Sem linha nova — verifica timeout do batch
                 if buffer and (time.time() - ultimo_env) >= BATCH_TIMEOUT:
                     ok = _enviar(ingest_url, sensor, buffer, cfg, session, session_lock)
                     with _fw_stats_lock:
@@ -172,7 +176,6 @@ def _loop_firewall(cfg: dict, parar: threading.Event,
             proc.kill()
         with _fw_stats_lock:
             _fw_stats["rodando"] = False
-
 # ══════════════════════════════════════════════════════════════════════════════
 # ENVIO HTTP
 # ══════════════════════════════════════════════════════════════════════════════
