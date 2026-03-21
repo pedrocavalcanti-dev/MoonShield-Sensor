@@ -209,3 +209,4 @@ alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"MS C2: User-Agent masscan de
 
 # 9900099–9900100 reservados para expansão
 # 9900101–9900120 reservados para regras de ambiente específico
+
