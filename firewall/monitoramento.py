@@ -90,8 +90,12 @@ def parar_monitoramento():
 # DETECÇÃO DE INTERFACES
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _detectar_interfaces() -> list:
-    """Detecta interfaces de rede reais do Linux via /sys/class/net/."""
+def _detectar_interfaces(cfg: dict) -> list:
+    """
+    Detecta interfaces de rede reais do Linux via /sys/class/net/.
+    Também atualiza iface_map no config automaticamente usando
+    interface_wan e interface_lan que o wizard já salvou.
+    """
     interfaces = []
     try:
         for nome in sorted(os.listdir('/sys/class/net/')):
@@ -118,6 +122,20 @@ def _detectar_interfaces() -> list:
                 pass
     except Exception:
         pass
+
+    # Atualiza iface_map automaticamente usando o que o wizard já salvou
+    # (interface_wan / interface_lan) — o analista nunca edita iface_map
+    wan = cfg.get('interface_wan', '')
+    lan = cfg.get('interface_lan', '')
+    if wan or lan:
+        iface_map = dict(cfg.get('iface_map', {}))
+        if wan:
+            iface_map['WAN'] = wan
+        if lan:
+            iface_map['LAN'] = lan
+        cfg['iface_map'] = iface_map
+        salvar_config(cfg)
+
     return interfaces
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -138,7 +156,7 @@ def _loop_firewall(cfg: dict, parar: threading.Event,
 
     # ── Heartbeat inicial — detecta interfaces e registra o sensor ───────────
     # Garante que o Sensor aparece nas configurações antes do primeiro evento
-    cfg['interfaces'] = _detectar_interfaces()
+    cfg['interfaces'] = _detectar_interfaces(cfg)
     _enviar(ingest_url, sensor, [], cfg, session, session_lock)
 
     cmd = [
