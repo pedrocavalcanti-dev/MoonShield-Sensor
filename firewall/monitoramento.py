@@ -12,6 +12,7 @@ _stats do nucleo/monitoramento.py — sem duplicar estado.
 ──────────────────────────────────────────────────────────────────────
 """
 
+import os
 import subprocess
 import threading
 import time
@@ -86,6 +87,40 @@ def parar_monitoramento():
         _fw_stats["rodando"] = False
 
 # ══════════════════════════════════════════════════════════════════════════════
+# DETECÇÃO DE INTERFACES
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _detectar_interfaces() -> list:
+    """Detecta interfaces de rede reais do Linux via /sys/class/net/."""
+    interfaces = []
+    try:
+        for nome in sorted(os.listdir('/sys/class/net/')):
+            if nome == 'lo':
+                continue
+            try:
+                result = subprocess.run(
+                    ['ip', '-4', 'addr', 'show', nome],
+                    capture_output=True, text=True, timeout=3,
+                )
+                ip = ''
+                for line in result.stdout.splitlines():
+                    if 'inet ' in line:
+                        ip = line.strip().split()[1].split('/')[0]
+                        break
+                with open(f'/sys/class/net/{nome}/operstate') as f:
+                    state = f.read().strip()
+                interfaces.append({
+                    'nome': nome,
+                    'ip':   ip,
+                    'up':   state == 'up',
+                })
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return interfaces
+
+# ══════════════════════════════════════════════════════════════════════════════
 # LOOP PRINCIPAL
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -101,8 +136,9 @@ def _loop_firewall(cfg: dict, parar: threading.Event,
     buffer     = []
     ultimo_env = time.time()
 
-    # ── Heartbeat inicial — registra o sensor no Django imediatamente ────────
+    # ── Heartbeat inicial — detecta interfaces e registra o sensor ───────────
     # Garante que o Sensor aparece nas configurações antes do primeiro evento
+    cfg['interfaces'] = _detectar_interfaces()
     _enviar(ingest_url, sensor, [], cfg, session, session_lock)
 
     cmd = [
@@ -176,6 +212,7 @@ def _loop_firewall(cfg: dict, parar: threading.Event,
             proc.kill()
         with _fw_stats_lock:
             _fw_stats["rodando"] = False
+
 # ══════════════════════════════════════════════════════════════════════════════
 # ENVIO HTTP
 # ══════════════════════════════════════════════════════════════════════════════
@@ -185,9 +222,16 @@ def _enviar(url: str, sensor: str, buffer: list,
     """
     Envia lote de eventos para /firewall/api/ingest/.
     Mesmo padrão do _enviar() em nucleo/monitoramento.py.
+    Heartbeats (buffer vazio) incluem as interfaces detectadas.
     """
     try:
-        payload = {"sensor": sensor, "eventos": buffer}
+        payload = {
+            "sensor":  sensor,
+            "eventos": buffer,
+        }
+        if not buffer:
+            payload["interfaces"] = cfg.get("interfaces", [])
+
         headers = {
             "Content-Type": "application/json",
             "X-MS-TOKEN":   cfg.get("token", ""),
