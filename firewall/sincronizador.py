@@ -4,6 +4,10 @@ firewall/sincronizador.py
 Sincroniza regras do Django para nftables via poll.
 Poll em /firewall/api/pending-rules/ a cada 30s.
 Quando há pendentes: gera script nft → aplica → confirma no Django.
+
+O iface_map é relido do cfg a cada poll — o monitoramento.py já
+o atualiza automaticamente via _detectar_interfaces(cfg), então
+o analista nunca precisa editar o config manualmente.
 ──────────────────────────────────────────────────────────────────────
 """
 
@@ -74,16 +78,23 @@ def _loop_sincronizador(cfg: dict, parar: threading.Event,
     confirm_url = cfg["Moon_url"].rstrip("/") + CONFIRM_PATH
     token       = cfg.get("token", "")
     headers     = {"X-MS-TOKEN": token}
-    iface_map   = cfg.get("iface_map", {"WAN": "eth0", "LAN": "eth1", "VPN": "tun0"})
 
-    avisos = validar_iface_map(iface_map)
+    # iface_map é lido aqui só para o log inicial — será relido a cada poll
+    # pois o monitoramento.py pode atualizá-lo via salvar_config após o
+    # heartbeat inicial (detecção automática de interfaces).
+    iface_map_inicial = cfg.get("iface_map", {"WAN": "eth0", "LAN": "eth1", "VPN": "tun0"})
+    avisos = validar_iface_map(iface_map_inicial)
     for aviso in avisos:
         logger.warning(f"[sync] {aviso}")
 
-    logger.info(f"[sync] Iniciado — poll a cada {POLL_INTERVAL}s | iface_map: {iface_map}")
+    logger.info(f"[sync] Iniciado — poll a cada {POLL_INTERVAL}s | iface_map: {iface_map_inicial}")
 
     while not parar.is_set():
         try:
+            # Relê iface_map do cfg a cada iteração — reflete o que
+            # _detectar_interfaces(cfg) salvou no heartbeat do monitoramento
+            iface_map = cfg.get("iface_map", {"WAN": "eth0", "LAN": "eth1", "VPN": "tun0"})
+
             _poll_e_aplicar(pending_url, confirm_url, headers, iface_map,
                             session, session_lock, cfg)
         except Exception as e:
