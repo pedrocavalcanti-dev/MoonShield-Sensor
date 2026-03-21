@@ -95,6 +95,9 @@ def _detectar_interfaces(cfg: dict) -> list:
     Detecta interfaces de rede reais do Linux via /sys/class/net/.
     Também atualiza iface_map no config automaticamente usando
     interface_wan e interface_lan que o wizard já salvou.
+
+    Considera UP: operstate == 'up' OU interface tem IP atribuído
+    (interfaces em modo PROMISC reportam operstate 'unknown' mesmo ativas).
     """
     interfaces = []
     try:
@@ -111,12 +114,18 @@ def _detectar_interfaces(cfg: dict) -> list:
                     if 'inet ' in line:
                         ip = line.strip().split()[1].split('/')[0]
                         break
+
                 with open(f'/sys/class/net/{nome}/operstate') as f:
                     state = f.read().strip()
+
+                # PROMISC interfaces reportam 'unknown' mesmo quando ativas
+                # considera UP se operstate é 'up' OU se tem IP atribuído
+                up = (state == 'up') or bool(ip)
+
                 interfaces.append({
                     'nome': nome,
                     'ip':   ip,
-                    'up':   state == 'up',
+                    'up':   up,
                 })
             except Exception:
                 pass
@@ -124,7 +133,6 @@ def _detectar_interfaces(cfg: dict) -> list:
         pass
 
     # Atualiza iface_map automaticamente usando o que o wizard já salvou
-    # (interface_wan / interface_lan) — o analista nunca edita iface_map
     wan = cfg.get('interface_wan', '')
     lan = cfg.get('interface_lan', '')
     if wan or lan:
