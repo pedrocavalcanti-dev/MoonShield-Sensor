@@ -79,15 +79,16 @@ def _loop_sincronizador(cfg: dict, parar: threading.Event,
     token       = cfg.get("token", "")
     headers     = {"X-MS-TOKEN": token}
 
-    # iface_map é lido aqui só para o log inicial — será relido a cada poll
-    # pois o monitoramento.py pode atualizá-lo via salvar_config após o
-    # heartbeat inicial (detecção automática de interfaces).
-    iface_map_inicial = cfg.get("iface_map", {"WAN": "eth0", "LAN": "eth1", "VPN": "tun0"})
-    avisos = validar_iface_map(iface_map_inicial)
-    for aviso in avisos:
-        logger.warning(f"[sync] {aviso}")
+    # Usa apenas o iface_map do config para validação — sem default fallback,
+    # pois o default (eth0/eth1/tun0) geraria avisos falsos em sistemas reais.
+    # O monitoramento.py atualiza cfg['iface_map'] no heartbeat inicial.
+    iface_map_inicial = cfg.get("iface_map") or {}
+    if iface_map_inicial:
+        avisos = validar_iface_map(iface_map_inicial)
+        for aviso in avisos:
+            logger.warning(f"[sync] {aviso}")
 
-    logger.info(f"[sync] Iniciado — poll a cada {POLL_INTERVAL}s | iface_map: {iface_map_inicial}")
+    logger.info(f"[sync] Iniciado — poll a cada {POLL_INTERVAL}s | iface_map: {iface_map_inicial or '(aguardando heartbeat)'}")
 
     while not parar.is_set():
         try:
