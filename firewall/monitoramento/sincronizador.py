@@ -1,14 +1,11 @@
 """
 firewall/monitoramento/sincronizador.py
 ──────────────────────────────────────────────────────────────────────
-Sincroniza regras do Django para nftables via poll.
-Poll em /firewall/api/pending-rules/ a cada 30s.
-Quando há pendentes: gera script nft → aplica → confirma no Django.
-
-v2: corrige import typo (nucelo→nucleo), hash para evitar reaplicação
-    desnecessária, contagem de regras ativas após apply, stats ricos.
-v3: hash agora inclui conteúdo das regras (action, src, port, priority,
-    enabled) — antes usava só IDs, então edições não disparavam reaplicação.
+v4: proteção contra auto-bloqueio do servidor MoonShield.
+    Ao aplicar regras, sempre injeta uma regra de prioridade 0
+    (acima de tudo) que garante acesso do IP do Django ao sensor.
+    Isso impede que o painel perca acesso mesmo se alguém criar
+    uma regra de bloqueio contra o IP do servidor Django.
 ──────────────────────────────────────────────────────────────────────
 """
 
@@ -23,19 +20,11 @@ from firewall.nucleo.conversor import gerar_script_nft, validar_iface_map
 
 logger = logging.getLogger(__name__)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# CONSTANTES
-# ══════════════════════════════════════════════════════════════════════════════
-
-VERSAO_SINCRONIZADOR = "3.0"
+VERSAO_SINCRONIZADOR = "4.0"
 POLL_INTERVAL        = 30
 PENDING_PATH         = "/firewall/api/pending-rules/"
 CONFIRM_PATH         = "/firewall/api/confirm-rules/"
 TMP_NFT_FILE         = "/tmp/ms_rules_sync.nft"
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ESTADO
-# ══════════════════════════════════════════════════════════════════════════════
 
 _sync_stats = {
     "rodando":           False,
@@ -48,9 +37,57 @@ _sync_stats = {
     "polls_sem_mudanca": 0,
 }
 _sync_lock = threading.Lock()
-
-# Hash das regras mais recentemente aplicadas — evita reaplicar o mesmo conjunto
 _hash_regras_aplicadas: str | None = None
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PROTEÇÃO — IP do Django nunca pode ser bloqueado
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _extrair_ip_django(moon_url: str) -> str | None:
+    """Extrai o IP do servidor Django da URL configurada."""
+    try:
+        import re
+        m = re.search(r'https?://(\d+\.\d+\.\d+\.\d+)', moon_url)
+        return m.group(1) if m else None
+    except Exception:
+        return None
+
+
+def _regra_protecao_django(ip_django: str) -> str:
+    """
+    Gera a linha nft que protege o IP do Django.
+    Prioridade máxima — inserida ANTES de qualquer outra regra.
+    Usa 'insert rule' em vez de 'add rule' para ficar no topo da chain.
+    """
+    return (
+        f"# MOONSHIELD-PROTECTED: acesso do servidor Django sempre permitido\n"
+        f"insert rule inet moonshield ms_rules ip saddr {ip_django} accept"
+        f"  # [0] MOONSHIELD-PROTECTED"
+    )
+
+
+def _script_com_protecao(rules: list, iface_map: dict, ip_django: str | None) -> str:
+    """
+    Gera o script nft com a regra de proteção do Django inserida
+    antes de todas as outras, se ip_django estiver disponível.
+    """
+    script = gerar_script_nft(rules, iface_map)
+
+    if not ip_django:
+        return script
+
+    # Insere a regra de proteção logo após o "flush chain"
+    linhas = script.splitlines()
+    resultado = []
+    for linha in linhas:
+        resultado.append(linha)
+        if linha.strip().startswith("flush chain inet moonshield ms_rules"):
+            resultado.append("")
+            resultado.append(_regra_protecao_django(ip_django))
+            resultado.append("")
+
+    return "\n".join(resultado)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # INTERFACE PÚBLICA
@@ -62,10 +99,6 @@ def _agora():
 
 
 def _hash_conteudo_regras(rules: list) -> str:
-    """
-    Hash baseado no conteúdo real das regras — não só nos IDs.
-    Detecta mudanças em action, src, port, priority, enabled, iface, proto, dst.
-    """
     chave = sorted(
         f"{r.get('id')}|{r.get('action')}|{r.get('src')}|{r.get('dst')}|"
         f"{r.get('port')}|{r.get('priority')}|{r.get('enabled')}|"
@@ -106,6 +139,7 @@ def parar_sincronizador():
     with _sync_lock:
         _sync_stats["rodando"] = False
 
+
 # ══════════════════════════════════════════════════════════════════════════════
 # LOOP
 # ══════════════════════════════════════════════════════════════════════════════
@@ -117,22 +151,27 @@ def _loop_sincronizador(cfg: dict, parar: threading.Event,
     token       = cfg.get("token", "")
     headers     = {"X-MS-TOKEN": token}
 
+    # Extrai e loga o IP protegido
+    ip_django = _extrair_ip_django(cfg.get("Moon_url", ""))
+    if ip_django:
+        logger.info(f"[sync] Proteção ativa — IP Django {ip_django} sempre permitido")
+    else:
+        logger.warning("[sync] Não foi possível detectar IP do Django — proteção desativada")
+
     iface_map_inicial = cfg.get("iface_map") or {}
     if iface_map_inicial:
-        avisos = validar_iface_map(iface_map_inicial)
-        for aviso in avisos:
+        for aviso in validar_iface_map(iface_map_inicial):
             logger.warning(f"[sync] {aviso}")
 
     logger.info(
-        f"[sync] Iniciado v{VERSAO_SINCRONIZADOR} — poll a cada {POLL_INTERVAL}s "
-        f"| iface_map: {iface_map_inicial or '(aguardando heartbeat)'}"
+        f"[sync] Iniciado v{VERSAO_SINCRONIZADOR} — poll a cada {POLL_INTERVAL}s"
     )
 
     while not parar.is_set():
         try:
             iface_map = cfg.get("iface_map", {"WAN": "eth0", "LAN": "eth1", "VPN": "tun0"})
             _poll_e_aplicar(pending_url, confirm_url, headers, iface_map,
-                            session, session_lock, cfg)
+                            session, session_lock, cfg, ip_django)
         except Exception as e:
             logger.error(f"[sync] Erro no loop: {e}")
             with _sync_lock:
@@ -147,12 +186,13 @@ def _loop_sincronizador(cfg: dict, parar: threading.Event,
         _sync_stats["rodando"] = False
     logger.info("[sync] Encerrado")
 
+
 # ══════════════════════════════════════════════════════════════════════════════
 # POLL E APLICAR
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _poll_e_aplicar(pending_url, confirm_url, headers, iface_map,
-                    session, session_lock, cfg):
+                    session, session_lock, cfg, ip_django=None):
     global _hash_regras_aplicadas
 
     with _sync_lock:
@@ -178,11 +218,10 @@ def _poll_e_aplicar(pending_url, confirm_url, headers, iface_map,
     if not data.get("ok") or not data.get("tem_pendentes"):
         return
 
-    rules     = data.get("rules", [])
-    im_remoto = data.get("iface_map", {})
-    iface_final = {**im_remoto, **iface_map}  # local tem prioridade
+    rules       = data.get("rules", [])
+    im_remoto   = data.get("iface_map", {})
+    iface_final = {**im_remoto, **iface_map}
 
-    # v3: hash baseado no conteúdo das regras, não só IDs
     hash_atual = _hash_conteudo_regras(rules)
 
     if hash_atual == _hash_regras_aplicadas:
@@ -198,7 +237,7 @@ def _poll_e_aplicar(pending_url, confirm_url, headers, iface_map,
 
     logger.info(f"[sync] {data.get('pendentes', 0)} pendente(s) — aplicando {len(rules)} regras")
 
-    ok, msg = _aplicar_regras(rules, iface_final)
+    ok, msg = _aplicar_regras(rules, iface_final, ip_django)
     rule_ids = [r["id"] for r in rules if "id" in r]
     _confirmar(confirm_url, headers, rule_ids, ok, msg, session, session_lock)
 
@@ -213,8 +252,10 @@ def _poll_e_aplicar(pending_url, confirm_url, headers, iface_map,
             _sync_stats["erros"] += 1
 
 
-def _aplicar_regras(rules: list, iface_map: dict) -> tuple[bool, str]:
-    script = gerar_script_nft(rules, iface_map)
+def _aplicar_regras(rules: list, iface_map: dict,
+                    ip_django: str | None = None) -> tuple[bool, str]:
+    # Gera script com proteção do Django embutida
+    script = _script_com_protecao(rules, iface_map, ip_django)
     try:
         with open(TMP_NFT_FILE, "w", encoding="utf-8") as f:
             f.write(script)
@@ -227,16 +268,15 @@ def _aplicar_regras(rules: list, iface_map: dict) -> tuple[bool, str]:
         if result.returncode != 0:
             err = (result.stderr or result.stdout or "erro desconhecido").strip()
             logger.error(f"[sync] nft -f falhou: {err}")
-            # Loga o script para debug
             logger.error(f"[sync] Script que falhou:\n{script}")
             return False, f"nft error: {err[:200]}"
 
-        if rules:
-            logger.info(f"[sync] {len(rules)} regras aplicadas ✓")
-            return True, f"{len(rules)} regras aplicadas"
+        if ip_django:
+            logger.info(f"[sync] {len(rules)} regras aplicadas ✓ | Django {ip_django} protegido")
         else:
-            logger.info("[sync] chain limpa (sem regras ativas) ✓")
-            return True, "chain limpa"
+            logger.info(f"[sync] {len(rules)} regras aplicadas ✓")
+
+        return True, f"{len(rules)} regras aplicadas"
 
     except subprocess.TimeoutExpired:
         return False, "Timeout ao aplicar regras"
@@ -253,7 +293,6 @@ def _aplicar_regras(rules: list, iface_map: dict) -> tuple[bool, str]:
 
 
 def _contar_regras_ativas() -> int:
-    """Conta linhas de regra reais na chain ms_rules após apply."""
     try:
         result = subprocess.run(
             ["nft", "list", "chain", "inet", "moonshield", "ms_rules"],
