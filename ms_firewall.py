@@ -4,14 +4,16 @@ ms_firewall.py
 ──────────────────────────────────────────────────────────────────────
 Entry point do sensor de firewall MoonShield.
 
-v4: PID file — impede múltiplas instâncias simultâneas.
-    Se já estiver rodando, avisa e sai em vez de subir outro processo.
+v5: --restart mata processo anterior e sobe novo automaticamente.
+    Ao iniciar monitoramento, força apply imediato das regras via
+    agente (não espera o poll de 30s).
 ──────────────────────────────────────────────────────────────────────
 """
 
 import os
 import sys
 import time
+import signal
 import threading
 import requests
 
@@ -39,22 +41,28 @@ import firewall.monitoramento.autoban as fw_ban
 PID_FILE = "/tmp/ms_firewall.pid"
 
 
+def _ler_pid() -> int | None:
+    try:
+        with open(PID_FILE) as f:
+            pid = int(f.read().strip())
+        os.kill(pid, 0)  # verifica se processo existe
+        return pid
+    except Exception:
+        return None
+
+
 def _verificar_pid():
     """Se já existe um processo rodando, avisa e encerra."""
-    if os.path.exists(PID_FILE):
-        try:
-            with open(PID_FILE) as f:
-                pid = int(f.read().strip())
-            # Verifica se o processo ainda existe
-            os.kill(pid, 0)
-            print(f"\n  [!] ms_firewall já está rodando (PID {pid}).")
-            print(f"  [!] Para parar: kill {pid}")
-            print(f"  [!] Para forçar restart: kill -9 {pid} && rm {PID_FILE}\n")
-            sys.exit(1)
-        except (ProcessLookupError, ValueError):
-            # Processo morreu mas PID file ficou — remove e continua
-            _remover_pid()
+    pid = _ler_pid()
+    if pid:
+        print(f"\n  [!] ms_firewall já está rodando (PID {pid}).")
+        print(f"  [!] Para parar:   kill {pid}")
+        print(f"  [!] Para restart: python ms_firewall.py --restart\n")
+        sys.exit(1)
+    _escrever_pid()
 
+
+def _escrever_pid():
     with open(PID_FILE, "w") as f:
         f.write(str(os.getpid()))
 
@@ -66,24 +74,55 @@ def _remover_pid():
         pass
 
 
+def _fazer_restart():
+    """
+    --restart: mata o processo anterior, remove PID file e sobe novo.
+    O processo antigo tem 3s para encerrar antes de ser forçado.
+    """
+    pid = _ler_pid()
+    if pid:
+        print(f"  [*] Parando processo anterior (PID {pid})...")
+        try:
+            os.kill(pid, signal.SIGTERM)
+            for _ in range(30):   # aguarda até 3s
+                time.sleep(0.1)
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    break
+            else:
+                # Ainda vivo — força
+                os.kill(pid, signal.SIGKILL)
+                print(f"  [*] Processo {pid} forçado (SIGKILL).")
+        except ProcessLookupError:
+            pass
+        _remover_pid()
+        print(f"  [+] Processo anterior encerrado.")
+    else:
+        print(f"  [*] Nenhum processo anterior encontrado.")
+
+    time.sleep(0.5)
+    _escrever_pid()
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # BOOT
 # ══════════════════════════════════════════════════════════════════════════════
 
 _BOOT_LINES_FW = [
-    ("MOONSHIELD FIREWALL SENSOR v{ver}",        "\033[96m\033[1m", 0.04),
-    ("Inicializando modulos...",                 "\033[37m\033[2m", 0.03),
-    ("[OK] nucleo.configuracao        carregado", "\033[92m\033[1m", 0.02),
-    ("[OK] nucleo.interface          pronto",    "\033[92m\033[1m", 0.02),
-    ("[OK] firewall.instalador        pronto",    "\033[92m\033[1m", 0.02),
-    ("[OK] firewall.analisador        pronto",    "\033[92m\033[1m", 0.02),
-    ("[OK] firewall.monitoramento     standby",   "\033[92m\033[1m", 0.02),
-    ("[OK] firewall.sincronizador     standby",   "\033[92m\033[1m", 0.02),
+    ("MOONSHIELD FIREWALL SENSOR v{ver}",         "\033[96m\033[1m", 0.04),
+    ("Inicializando modulos...",                  "\033[37m\033[2m", 0.03),
+    ("[OK] nucleo.configuracao        carregado",  "\033[92m\033[1m", 0.02),
+    ("[OK] nucleo.interface          pronto",     "\033[92m\033[1m", 0.02),
+    ("[OK] firewall.instalador        pronto",     "\033[92m\033[1m", 0.02),
+    ("[OK] firewall.analisador        pronto",     "\033[92m\033[1m", 0.02),
+    ("[OK] firewall.monitoramento     standby",    "\033[92m\033[1m", 0.02),
+    ("[OK] firewall.sincronizador     standby",    "\033[92m\033[1m", 0.02),
     ("[OK] firewall.agente.agente      standby",   "\033[92m\033[1m", 0.02),
     ("[OK] firewall.agente.dashboard   standby",   "\033[92m\033[1m", 0.02),
     ("[OK] firewall.monitoramento.autoban standby","\033[92m\033[1m", 0.02),
-    ("Verificando nftables...",                  "\033[37m\033[2m", 0.03),
-    ("Conectando ao MOONSHIELD...",              "\033[37m\033[2m", 0.05),
+    ("Verificando nftables...",                   "\033[37m\033[2m", 0.03),
+    ("Conectando ao MOONSHIELD...",               "\033[37m\033[2m", 0.05),
 ]
 
 def _boot_firewall(cfg: dict):
@@ -185,14 +224,10 @@ def menu_firewall(cfg: dict):
         cred_label    = f"{usuario_atual}  {'[OK]' if tem_senha else '[!!] sem senha'}"
 
         mon_rodando  = fw_mon.esta_rodando()
-        sync_rodando = fw_sync.esta_rodando()
-
-        mon_tag  = "[RODANDO]" if mon_rodando  else ""
-        sync_tag = "[RODANDO]" if sync_rodando else ""
-
-        ag_stats   = agente_stats()
-        ag_rodando = ag_stats["rodando"]
-        ag_tag     = f"[ATIVO :{ag_stats['porta']}]" if ag_rodando else ""
+        ag_stats     = agente_stats()
+        ag_rodando   = ag_stats["rodando"]
+        ag_tag       = f"[ATIVO :{ag_stats['porta']}]" if ag_rodando else ""
+        mon_tag      = f"[RODANDO] {ag_tag}" if mon_rodando else ""
 
         linha_texto("  --- Operacao -----------------------------------------------", C_NEON_DIM)
         linha_texto(
@@ -250,6 +285,39 @@ _session_lock = threading.Lock()
 _stop_event   = None
 
 
+def _forcar_apply_inicial(cfg: dict, stop: threading.Event):
+    """
+    Após iniciar o monitoramento, aguarda 3s e força o apply das
+    regras via agente — sem esperar o poll de 30s do sincronizador.
+    """
+    def _apply():
+        time.sleep(3)
+        if stop.is_set():
+            return
+        try:
+            token     = cfg.get("token", "")
+            porta     = cfg.get("agente_porta", 8765)
+            url       = f"http://127.0.0.1:{porta}/aplicar"
+            import json, urllib.request as _req
+            # Pega regras pendentes do Django
+            pending_url = cfg["Moon_url"].rstrip("/") + "/firewall/api/pending-rules/"
+            r = _req.Request(pending_url)
+            r.add_header("X-MS-TOKEN", token)
+            resp = _req.urlopen(r, timeout=5)
+            data = json.loads(resp.read())
+            rules     = data.get("rules", [])
+            iface_map = data.get("iface_map", {})
+            # Envia ao agente local
+            payload = json.dumps({"rules": rules, "iface_map": iface_map}).encode()
+            req2 = _req.Request(url, data=payload, method="POST")
+            req2.add_header("Content-Type", "application/json")
+            req2.add_header("X-MS-TOKEN", token)
+            _req.urlopen(req2, timeout=5)
+        except Exception:
+            pass  # falha silenciosa — poll de 30s vai pegar
+    threading.Thread(target=_apply, daemon=True).start()
+
+
 def _tela_monitoramento(cfg: dict):
     _cabecalho_fw(cfg)
     linha_texto("  INICIAR MONITORAMENTO DE FIREWALL", C_TITULO)
@@ -297,6 +365,10 @@ def _tela_monitoramento(cfg: dict):
 
     fw_mon.iniciar_monitoramento(cfg, _stop_event, _session, _session_lock)
     fw_sync.iniciar_sincronizador(cfg, _stop_event, _session, _session_lock)
+
+    # Força apply imediato das regras ao iniciar (não espera 30s)
+    _forcar_apply_inicial(cfg, _stop_event)
+    linha_texto("  Apply inicial agendado (3s)...", C_DIM)
 
     stats_fn = {
         "monitoramento": fw_mon.obter_stats,
@@ -430,6 +502,10 @@ def modo_auto(cfg: dict):
     fw_sync.iniciar_sincronizador(cfg, stop, _session, _session_lock)
     print(f"[{agora()}] Sincronizador de regras iniciado (poll 30s).")
 
+    # Força apply imediato ao iniciar
+    _forcar_apply_inicial(cfg, stop)
+    print(f"[{agora()}] Apply inicial agendado (3s).")
+
     stats_fn = {
         "monitoramento": fw_mon.obter_stats,
         "sincronizador": fw_sync.obter_stats,
@@ -461,19 +537,34 @@ def main():
         print("\n  [!] Execute como root: sudo venv/bin/python3 ms_firewall.py\n")
         sys.exit(1)
 
-    # Impede múltiplas instâncias — cria /tmp/ms_firewall.pid
-    _verificar_pid()
+    # --restart: mata processo anterior e sobe novo
+    if "--restart" in sys.argv:
+        _fazer_restart()
+        import atexit
+        atexit.register(_remover_pid)
+        cfg = carregar_config()
+        _boot_firewall(cfg)
+        if not cfg.get("configurado") and not cfg.get("wizard_ok"):
+            from nucleo.interface import wizard
+            cfg = wizard(cfg)
+        menu_firewall(cfg)
+        return
 
-    # Remove PID ao sair normalmente
+    # --auto: modo serviço (systemd)
+    if "--auto" in sys.argv:
+        _verificar_pid()
+        import atexit
+        atexit.register(_remover_pid)
+        cfg = carregar_config()
+        modo_auto(cfg)
+        return
+
+    # Modo normal — impede múltiplas instâncias
+    _verificar_pid()
     import atexit
     atexit.register(_remover_pid)
 
     cfg = carregar_config()
-
-    if "--auto" in sys.argv:
-        modo_auto(cfg)
-        return
-
     _boot_firewall(cfg)
 
     if not cfg.get("configurado") and not cfg.get("wizard_ok"):
