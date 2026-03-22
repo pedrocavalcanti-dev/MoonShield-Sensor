@@ -157,9 +157,7 @@ def _poll_e_aplicar(pending_url, confirm_url, headers, iface_map,
 
 
 def _aplicar_regras(rules: list, iface_map: dict) -> tuple[bool, str]:
-    if not rules:
-        return True, "Sem regras"
-
+    # Gera script — lista vazia resulta num script que só faz flush da chain
     script = gerar_script_nft(rules, iface_map)
     try:
         with open(TMP_NFT_FILE, "w", encoding="utf-8") as f:
@@ -175,8 +173,12 @@ def _aplicar_regras(rules: list, iface_map: dict) -> tuple[bool, str]:
             logger.error(f"[sync] nft -f falhou: {err}")
             return False, f"nft error: {err[:200]}"
 
-        logger.info(f"[sync] {len(rules)} regras aplicadas ✓")
-        return True, f"{len(rules)} regras aplicadas"
+        if rules:
+            logger.info(f"[sync] {len(rules)} regras aplicadas ✓")
+            return True, f"{len(rules)} regras aplicadas"
+        else:
+            logger.info("[sync] chain limpa (sem regras ativas) ✓")
+            return True, "chain limpa"
 
     except subprocess.TimeoutExpired:
         return False, "Timeout ao aplicar regras"
