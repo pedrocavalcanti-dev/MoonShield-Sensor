@@ -54,15 +54,9 @@ def _extrair_ip_django(moon_url: str) -> str | None:
 
 
 def _regra_protecao_django(ip_django: str) -> str:
-    """
-    Gera a linha nft que protege o IP do Django.
-    Prioridade máxima — inserida ANTES de qualquer outra regra.
-    Usa 'insert rule' em vez de 'add rule' para ficar no topo da chain.
-    """
     return (
         f"# MOONSHIELD-PROTECTED: acesso do servidor Django sempre permitido\n"
         f"insert rule inet moonshield ms_rules ip saddr {ip_django} accept"
-        f"  # [0] MOONSHIELD-PROTECTED"
     )
 
 
