@@ -96,13 +96,11 @@ def gerar_script_nft(rules: list[dict], iface_map: dict | None = None) -> str:
         f"# MoonShield — Regras sincronizadas em {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         f"# Total: {len(regras_ativas)} regras ativas",
         "",
-        # Garante existência da tabela e chains sem falhar se já existirem
+        # Garante existência da tabela e chain ms_rules sem falhar se já existirem.
+        # Chains com 'type filter hook' NÃO podem ser recriadas com add chain se já
+        # existirem — o nft retorna erro. Por isso só garantimos ms_rules (sem hook).
         "add table inet moonshield",
-        "",
-        "add chain inet moonshield ms_emergency { type filter hook input priority -10; policy accept; }",
         "add chain inet moonshield ms_rules",
-        "add chain inet moonshield ms_input { type filter hook input priority 0; policy accept; }",
-        "add chain inet moonshield ms_forward { type filter hook forward priority 0; policy accept; }",
         "",
         # Limpa só as regras — não toca na estrutura
         "flush chain inet moonshield ms_rules",
