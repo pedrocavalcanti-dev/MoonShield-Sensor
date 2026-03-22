@@ -2,6 +2,9 @@
 firewall/nucleo/conversor.py
 ──────────────────────────────────────────────────────────────────────
 Converte dicts de regras do Django/MoonShield em comandos nft.
+
+v2: corrige ordem das partes — nft exige iface → saddr → daddr → proto → dport
+    A ordem errada (proto antes de saddr) causava "syntax error, unexpected ip"
 ──────────────────────────────────────────────────────────────────────
 """
 
@@ -17,28 +20,38 @@ IFACE_MAP_DEFAULT = {
 
 
 def regra_para_nft_inline(regra: dict, iface_map: dict | None = None) -> str | None:
-    """Gera expressão nft de uma regra. Retorna None se inválida."""
+    """
+    Gera expressão nft de uma regra.
+    Ordem obrigatória no nft: iface → ip saddr → ip daddr → proto → dport → acao
+    Colocar proto antes de saddr causa: 'syntax error, unexpected ip'
+    Retorna None se inválida.
+    """
     im     = {**IFACE_MAP_DEFAULT, **(iface_map or {})}
     partes = []
 
+    # 1. Interface (iifname / oifname)
     iface      = regra.get("iface", "any")
     iface_nome = im.get(iface, iface if iface != "any" else "")
     if iface_nome:
         direcao = "iifname" if regra.get("dir", "in") == "in" else "oifname"
         partes.append(f'{direcao} "{iface_nome}"')
 
-    proto = (regra.get("proto") or "any").lower()
-    if proto not in ("any", ""):
-        partes.append(proto)
-
+    # 2. IP de origem (deve vir ANTES do proto)
     src = (regra.get("src") or "any").strip()
     if src and src != "any":
         partes.append(f"ip saddr {src}")
 
+    # 3. IP de destino (deve vir ANTES do proto)
     dst = (regra.get("dst") or "any").strip()
     if dst and dst != "any":
         partes.append(f"ip daddr {dst}")
 
+    # 4. Protocolo (deve vir APOS saddr/daddr)
+    proto = (regra.get("proto") or "any").lower()
+    if proto not in ("any", ""):
+        partes.append(proto)
+
+    # 5. Porta (so TCP/UDP)
     port = str(regra.get("port") or "any").strip()
     if port and port != "any" and proto in ("tcp", "udp"):
         if "-" in port:
@@ -47,13 +60,14 @@ def regra_para_nft_inline(regra: dict, iface_map: dict | None = None) -> str | N
         else:
             partes.append(f"dport {port}")
 
+    # 6. Acao
     partes.append("accept" if regra.get("action") == "allow" else "drop")
     return " ".join(partes)
 
 
 def preview_regra(regra: dict, iface_map: dict | None = None) -> str:
     """
-    Versão legível para humanos — usada na coluna 'Preview nft' do painel.
+    Versao legivel para humanos — usada na coluna 'Preview nft' do painel.
     ex: enp0s3  TCP:22  DROP
         any  UDP:53  ACCEPT
     """
@@ -79,11 +93,12 @@ def preview_regra(regra: dict, iface_map: dict | None = None) -> str:
 def gerar_script_nft(rules: list[dict], iface_map: dict | None = None) -> str:
     """
     Gera script nft que:
-    1. Garante que a tabela e chains existam (add — não falha se já existir)
+    1. Garante que a tabela e chain ms_rules existam (add — nao falha se ja existir)
     2. Faz flush apenas na chain ms_rules
     3. Reinserere todas as regras em ordem de prioridade
 
-    Nunca usa 'table { }' pois recriar uma tabela existente causa erro no nft.
+    NAO usa 'table { }' nem 'add chain ... { type filter hook ... }'
+    pois recriar chains com hook causa erro se elas ja existem.
     """
     from datetime import datetime
 
@@ -96,13 +111,12 @@ def gerar_script_nft(rules: list[dict], iface_map: dict | None = None) -> str:
         f"# MoonShield — Regras sincronizadas em {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         f"# Total: {len(regras_ativas)} regras ativas",
         "",
-        # Garante existência da tabela e chain ms_rules sem falhar se já existirem.
-        # Chains com 'type filter hook' NÃO podem ser recriadas com add chain se já
-        # existirem — o nft retorna erro. Por isso só garantimos ms_rules (sem hook).
+        # Garante existencia sem falhar se ja existirem
+        # Chains com 'type filter hook' NAO podem ser recriadas — so ms_rules (sem hook)
         "add table inet moonshield",
         "add chain inet moonshield ms_rules",
         "",
-        # Limpa só as regras — não toca na estrutura
+        # Limpa so as regras — nao toca na estrutura
         "flush chain inet moonshield ms_rules",
         "",
     ]
@@ -121,7 +135,7 @@ def gerar_script_nft(rules: list[dict], iface_map: dict | None = None) -> str:
 def validar_iface_map(iface_map: dict) -> list[str]:
     """
     Valida se as interfaces mapeadas existem no sistema.
-    Só avisa quando o valor não está vazio e a interface não existe.
+    So avisa quando o valor nao esta vazio e a interface nao existe.
     """
     import os
     avisos = []
@@ -130,6 +144,6 @@ def validar_iface_map(iface_map: dict) -> list[str]:
             continue
         if not os.path.exists(f"/sys/class/net/{real}"):
             avisos.append(
-                f"Interface '{real}' (mapeada de '{logico}') não encontrada no sistema"
+                f"Interface '{real}' (mapeada de '{logico}') nao encontrada no sistema"
             )
     return avisos
