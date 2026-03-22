@@ -4,6 +4,10 @@ firewall/agente/agente.py
 Servidor HTTP Flask local (porta 8765) — o Django chama diretamente
 este servidor em vez de esperar o sensor fazer poll a cada 30s.
 
+v3: usa threading=True no werkzeug para evitar travamento quando
+    o dashboard TUI ocupa o loop principal. Cada request roda em
+    thread separada — resolve o bug de "request enviado, sem resposta".
+
 Autenticação: header X-MS-TOKEN em todos os endpoints.
 ──────────────────────────────────────────────────────────────────────
 """
@@ -31,7 +35,7 @@ from firewall.monitoramento.monitoramento import obter_stats as _stats_mon
 # CONSTANTES
 # ══════════════════════════════════════════════════════════════════════════════
 
-VERSAO_AGENTE = "2.0"
+VERSAO_AGENTE = "3.0"
 PORTA_PADRAO  = 8765
 
 TMP_APPLY = "/tmp/ms_agente_apply.nft"
@@ -50,8 +54,6 @@ _agente_stats: dict = {
     "iniciado_em":     "—",
 }
 _agente_lock = threading.Lock()
-_servidor: Flask | None = None
-_thread:   threading.Thread | None = None
 _cfg_ref:  dict = {}
 
 # Guarda timers de expiração de bloqueios: ip → threading.Timer
@@ -207,13 +209,16 @@ def ep_bloquear():
         if not ip:
             return jsonify({"ok": False, "error": "IP obrigatório"}), 400
 
-        # Monta expressão nft
+        # Monta expressão nft — ordem correta: iface → saddr → proto → dport
         partes = []
         if iface:
             partes.append(f'iifname "{iface}"')
-        if proto and proto not in ("any", ""):
-            partes.append(proto)
         partes.append(f"ip saddr {ip}")
+        if proto and proto not in ("any", ""):
+            if proto == "icmp":
+                partes.append("ip protocol icmp")
+            else:
+                partes.append(proto)
         if porta and proto in ("tcp", "udp"):
             partes.append(f"dport {porta}")
         partes.append("drop")
@@ -225,10 +230,8 @@ def ep_bloquear():
         if result.returncode != 0:
             return jsonify({"ok": False, "error": result.stderr.strip()}), 500
 
-        # Pega handle da regra recém-adicionada
         handle = _ultimo_handle("ms_emergency")
 
-        # Agenda expiração
         _cancelar_timer(ip)
         seg = _expires_para_segundos(expires)
         if seg and seg > 0:
@@ -281,7 +284,6 @@ def ep_interfaces():
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _detectar_interfaces() -> list[dict]:
-    """Lê /sys/class/net/ e retorna interfaces com IP e estado."""
     ifaces = []
     try:
         for nome in os.listdir("/sys/class/net/"):
@@ -300,8 +302,7 @@ def _detectar_interfaces() -> list[dict]:
                 pass
 
             try:
-                state_path = f"/sys/class/net/{nome}/operstate"
-                state = open(state_path).read().strip()
+                state = open(f"/sys/class/net/{nome}/operstate").read().strip()
             except Exception:
                 state = "unknown"
 
@@ -313,7 +314,6 @@ def _detectar_interfaces() -> list[dict]:
 
 
 def _listar_chain(chain: str) -> list[dict]:
-    """Lista regras de uma chain como lista de dicts."""
     result = subprocess.run(
         ["nft", "-a", "list", "chain", "inet", "moonshield", chain],
         capture_output=True, text=True, timeout=10,
@@ -342,7 +342,6 @@ def _listar_chain(chain: str) -> list[dict]:
 
 
 def _expr_para_preview(expr: str) -> str:
-    """Converte expressão nft para formato legível: enp0s3 TCP:22 DROP."""
     iface = re.search(r'iifname "([^"]+)"', expr)
     proto = re.search(r'\b(tcp|udp|icmp)\b', expr)
     port  = re.search(r'dport (\S+)', expr)
@@ -358,7 +357,6 @@ def _expr_para_preview(expr: str) -> str:
 
 
 def _ultimo_handle(chain: str) -> int | None:
-    """Retorna o handle mais alto da chain (última regra adicionada)."""
     result = subprocess.run(
         ["nft", "-a", "list", "chain", "inet", "moonshield", chain],
         capture_output=True, text=True, timeout=10,
@@ -368,7 +366,6 @@ def _ultimo_handle(chain: str) -> int | None:
 
 
 def _handles_por_ip(chain: str, ip: str) -> list[int]:
-    """Retorna todos os handles de regras que mencionam o IP na chain."""
     result = subprocess.run(
         ["nft", "-a", "list", "chain", "inet", "moonshield", chain],
         capture_output=True, text=True, timeout=10,
@@ -389,7 +386,6 @@ def _cancelar_timer(ip: str):
 
 
 def _expirar_bloqueio(ip: str):
-    """Chamado pelo Timer quando o bloqueio expira."""
     handles = _handles_por_ip("ms_emergency", ip)
     for h in handles:
         subprocess.run(
@@ -409,29 +405,31 @@ def _expires_para_segundos(expires: str) -> int | None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def iniciar_agente(cfg: dict, parar: threading.Event) -> threading.Thread:
-    global _thread, _cfg_ref, _inicio_ts
+    global _cfg_ref, _inicio_ts
 
     _cfg_ref   = cfg
     _inicio_ts = time.time()
     porta      = cfg.get("agente_porta", PORTA_PADRAO)
 
     with _agente_lock:
-        _agente_stats["rodando"]    = True
-        _agente_stats["porta"]      = porta
+        _agente_stats["rodando"]     = True
+        _agente_stats["porta"]       = porta
         _agente_stats["iniciado_em"] = _agora()
 
     def _run():
+        # threaded=True — cada request roda em thread própria
+        # Resolve travamento quando dashboard TUI ocupa o loop principal
         from werkzeug.serving import make_server
-        srv = make_server("0.0.0.0", porta, app)
+        srv = make_server("0.0.0.0", porta, app, threaded=True)
         srv.timeout = 1
         while not parar.is_set():
             srv.handle_request()
         with _agente_lock:
             _agente_stats["rodando"] = False
 
-    _thread = threading.Thread(target=_run, name="ms-agente", daemon=True)
-    _thread.start()
-    return _thread
+    t = threading.Thread(target=_run, name="ms-agente", daemon=True)
+    t.start()
+    return t
 
 
 def parar_agente():
