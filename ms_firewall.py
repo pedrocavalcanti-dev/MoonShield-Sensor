@@ -33,7 +33,7 @@ from nucleo.interface    import (
     C_TITULO, C_WHITE, C_DIM, C_OK, C_ERRO, C_AVISO,
     C_MENU_TXT, C_NEON_DIM, C_BORDA, C_NORMAL,
 )
-from firewall.nucelo.instalador   import obter_status, instalar_regras
+from firewall.nucleo.instalador   import obter_status, instalar_regras
 from firewall.interface.interface    import tela_firewall
 import firewall.monitoramento.monitoramento as fw_mon
 import firewall.monitoramento.sincronizador as fw_sync
