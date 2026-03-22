@@ -3,8 +3,10 @@ firewall/nucleo/conversor.py
 ──────────────────────────────────────────────────────────────────────
 Converte dicts de regras do Django/MoonShield em comandos nft.
 
-v3: corrige ordem das partes (iface→saddr→daddr→proto→dport→acao)
-    corrige ICMP: usa "ip protocol icmp" em vez de "icmp" sozinho
+v4: regras DENY agora usam "log prefix "MS-DROP: " flags all counter drop"
+    em vez de só "drop" — isso faz o nft logar cada pacote bloqueado
+    no journald com prefixo MS-DROP: para o sensor capturar e enviar
+    ao Django como evento DROP visível no dashboard.
 ──────────────────────────────────────────────────────────────────────
 """
 
@@ -20,8 +22,9 @@ IFACE_MAP_DEFAULT = {
 
 def regra_para_nft_inline(regra: dict, iface_map: dict | None = None) -> str | None:
     """
-    Ordem obrigatoria no nft: iface -> ip saddr -> ip daddr -> proto -> dport -> acao
-    ICMP precisa de "ip protocol icmp" — nao pode ser so "icmp" em regras IPv4.
+    Ordem obrigatória no nft: iface → ip saddr → ip daddr → proto → dport → ação
+    ICMP precisa de "ip protocol icmp" — não pode ser só "icmp" em regras IPv4.
+    DENY usa log antes de drop para aparecer no dashboard.
     """
     im     = {**IFACE_MAP_DEFAULT, **(iface_map or {})}
     partes = []
@@ -43,14 +46,14 @@ def regra_para_nft_inline(regra: dict, iface_map: dict | None = None) -> str | N
     if dst and dst != "any":
         partes.append(f"ip daddr {dst}")
 
-    # 4. Protocolo (APOS saddr/daddr)
+    # 4. Protocolo (APÓS saddr/daddr)
     proto = (regra.get("proto") or "any").lower()
     if proto == "icmp":
         partes.append("ip protocol icmp")
     elif proto not in ("any", ""):
         partes.append(proto)
 
-    # 5. Porta (so TCP/UDP)
+    # 5. Porta (só TCP/UDP)
     port = str(regra.get("port") or "any").strip()
     if port and port != "any" and proto in ("tcp", "udp"):
         if "-" in port:
@@ -59,8 +62,12 @@ def regra_para_nft_inline(regra: dict, iface_map: dict | None = None) -> str | N
         else:
             partes.append(f"dport {port}")
 
-    # 6. Acao
-    partes.append("accept" if regra.get("action") == "allow" else "drop")
+    # 6. Ação — DENY loga antes de dropar para aparecer no dashboard
+    if regra.get("action") == "allow":
+        partes.append("accept")
+    else:
+        partes.append('log prefix "MS-DROP: " flags all counter drop')
+
     return " ".join(partes)
 
 
@@ -82,9 +89,9 @@ def preview_regra(regra: dict, iface_map: dict | None = None) -> str:
 def gerar_script_nft(rules: list[dict], iface_map: dict | None = None) -> str:
     """
     Gera script nft seguro:
-    - add table / add chain nao falham se ja existirem
-    - NAO recria chains com 'type filter hook' (causaria erro)
-    - flush so na ms_rules, depois reinserere em ordem de prioridade
+    - add table / add chain não falham se já existirem
+    - NÃO recria chains com 'type filter hook' (causaria erro)
+    - flush só na ms_rules, depois reinserere em ordem de prioridade
     """
     from datetime import datetime
 
@@ -123,6 +130,6 @@ def validar_iface_map(iface_map: dict) -> list[str]:
             continue
         if not os.path.exists(f"/sys/class/net/{real}"):
             avisos.append(
-                f"Interface '{real}' (mapeada de '{logico}') nao encontrada no sistema"
+                f"Interface '{real}' (mapeada de '{logico}') não encontrada no sistema"
             )
     return avisos

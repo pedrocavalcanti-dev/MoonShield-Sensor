@@ -4,21 +4,12 @@ ms_firewall.py
 ──────────────────────────────────────────────────────────────────────
 Entry point do sensor de firewall MoonShield.
 
-Lê eventos do nftables via journald em tempo real e envia para o
-painel Django em /firewall/api/ingest/.
-
-Também sincroniza regras: faz poll em /firewall/api/pending-rules/
-a cada 30s e aplica via nft quando há regras pendentes.
-
-Reutiliza config.json do ms_sensor.py — mesmas credenciais e URL.
-Se já configurado pelo IDS, vai direto ao menu.
-
-Uso:
-  sudo venv/bin/python3 ms_firewall.py          # menu interativo
-  sudo venv/bin/python3 ms_firewall.py --auto   # modo serviço
+v4: PID file — impede múltiplas instâncias simultâneas.
+    Se já estiver rodando, avisa e sai em vez de subir outro processo.
 ──────────────────────────────────────────────────────────────────────
 """
 
+import os
 import sys
 import time
 import threading
@@ -40,6 +31,40 @@ import firewall.monitoramento.sincronizador as fw_sync
 from firewall.agente.agente           import iniciar_agente, parar_agente, obter_stats as agente_stats
 from firewall.agente.dashboard        import iniciar_dashboard, parar_dashboard
 import firewall.monitoramento.autoban as fw_ban
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PID FILE — impede múltiplas instâncias
+# ══════════════════════════════════════════════════════════════════════════════
+
+PID_FILE = "/tmp/ms_firewall.pid"
+
+
+def _verificar_pid():
+    """Se já existe um processo rodando, avisa e encerra."""
+    if os.path.exists(PID_FILE):
+        try:
+            with open(PID_FILE) as f:
+                pid = int(f.read().strip())
+            # Verifica se o processo ainda existe
+            os.kill(pid, 0)
+            print(f"\n  [!] ms_firewall já está rodando (PID {pid}).")
+            print(f"  [!] Para parar: kill {pid}")
+            print(f"  [!] Para forçar restart: kill -9 {pid} && rm {PID_FILE}\n")
+            sys.exit(1)
+        except (ProcessLookupError, ValueError):
+            # Processo morreu mas PID file ficou — remove e continua
+            _remover_pid()
+
+    with open(PID_FILE, "w") as f:
+        f.write(str(os.getpid()))
+
+
+def _remover_pid():
+    try:
+        os.remove(PID_FILE)
+    except Exception:
+        pass
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # BOOT
@@ -90,6 +115,7 @@ def _boot_firewall(cfg: dict):
     print(f"  \033[92m\033[1m [OK]\033[0m")
     time.sleep(0.25)
 
+
 # ══════════════════════════════════════════════════════════════════════════════
 # STATUS DE CONEXÃO
 # ══════════════════════════════════════════════════════════════════════════════
@@ -104,6 +130,7 @@ def _status_conexao(cfg: dict) -> tuple:
         return f"[!] HTTP {r.status_code}", C_AVISO
     except Exception:
         return "[-] OFFLINE", C_ERRO
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CABEÇALHO FIREWALL
@@ -137,6 +164,7 @@ def _cabecalho_fw(cfg: dict, verificar: bool = False):
     )
     separador()
 
+
 # ══════════════════════════════════════════════════════════════════════════════
 # MENU PRINCIPAL DO FIREWALL
 # ══════════════════════════════════════════════════════════════════════════════
@@ -159,12 +187,12 @@ def menu_firewall(cfg: dict):
         mon_rodando  = fw_mon.esta_rodando()
         sync_rodando = fw_sync.esta_rodando()
 
-        mon_tag  = "[RODANDO]"  if mon_rodando  else ""
-        sync_tag = "[RODANDO]"  if sync_rodando else ""
+        mon_tag  = "[RODANDO]" if mon_rodando  else ""
+        sync_tag = "[RODANDO]" if sync_rodando else ""
 
-        ag_stats    = agente_stats()
-        ag_rodando  = ag_stats["rodando"]
-        ag_tag      = f"[ATIVO :{ag_stats['porta']}]" if ag_rodando else ""
+        ag_stats   = agente_stats()
+        ag_rodando = ag_stats["rodando"]
+        ag_tag     = f"[ATIVO :{ag_stats['porta']}]" if ag_rodando else ""
 
         linha_texto("  --- Operacao -----------------------------------------------", C_NEON_DIM)
         linha_texto(
@@ -209,7 +237,9 @@ def menu_firewall(cfg: dict):
         elif opcao == "Q":
             limpar()
             print(C_DIM + "\n  MOONSHIELD Firewall Sensor encerrado.\n")
+            _remover_pid()
             sys.exit(0)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TELA DE MONITORAMENTO + SINCRONIZADOR
@@ -242,7 +272,6 @@ def _tela_monitoramento(cfg: dict):
         aguardar_enter()
         return
 
-    # Autentica antes de começar
     usuario = cfg.get("Moon_usuario", "")
     senha   = cfg.get("Moon_senha", "")
     if usuario and senha:
@@ -260,21 +289,15 @@ def _tela_monitoramento(cfg: dict):
     global _stop_event
     _stop_event = threading.Event()
 
-    # Inicia agente HTTP local (:8765)
     linha_texto("  Iniciando agente HTTP (:8765)...", C_DIM)
     iniciar_agente(cfg, _stop_event)
 
-    # Inicia autoban
     from firewall.monitoramento.autoban import registrar_evento as _ban_ev
     linha_texto("  Auto-ban ativo.", C_DIM)
 
-    # Inicia monitoramento de logs
     fw_mon.iniciar_monitoramento(cfg, _stop_event, _session, _session_lock)
-
-    # Inicia sincronizador de regras (poll Django → nft)
     fw_sync.iniciar_sincronizador(cfg, _stop_event, _session, _session_lock)
 
-    # Substitui o loop de print pelo dashboard
     stats_fn = {
         "monitoramento": fw_mon.obter_stats,
         "sincronizador": fw_sync.obter_stats,
@@ -283,7 +306,6 @@ def _tela_monitoramento(cfg: dict):
     }
     try:
         iniciar_dashboard(cfg, _stop_event, stats_fn)
-        # Aguarda Ctrl+C — o dashboard roda em thread
         while not _stop_event.is_set():
             time.sleep(0.5)
     except KeyboardInterrupt:
@@ -299,41 +321,43 @@ def _tela_monitoramento(cfg: dict):
         print_resultado(True, "Todos os modulos encerrados.")
         aguardar_enter()
 
+
 # ══════════════════════════════════════════════════════════════════════════════
 # TELAS DE CONFIGURAÇÃO
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _tela_instalar(cfg: dict):
+def _tela_instalar(cfg):
     from firewall.interface.interface import _tela_instalar as _fw_instalar
     _fw_instalar(cfg)
 
-def _tela_status(cfg: dict):
+def _tela_status(cfg):
     from firewall.interface.interface import _tela_status as _fw_status
     _fw_status(cfg)
 
-def _tela_listar(cfg: dict):
+def _tela_listar(cfg):
     from firewall.interface.interface import _tela_listar as _fw_listar
     _fw_listar(cfg)
 
-def _tela_remover(cfg: dict):
+def _tela_remover(cfg):
     from firewall.interface.interface import _tela_remover as _fw_remover
     _fw_remover(cfg)
 
-def _tela_config_url(cfg: dict) -> dict:
+def _tela_config_url(cfg):
     from nucleo.interface import tela_config_ip
     return tela_config_ip(cfg)
 
-def _tela_testar_conexao(cfg: dict):
+def _tela_testar_conexao(cfg):
     from nucleo.interface import tela_testar_conexao
     tela_testar_conexao(cfg)
 
-def _tela_ver_config(cfg: dict):
+def _tela_ver_config(cfg):
     from nucleo.interface import tela_ver_config
     tela_ver_config(cfg)
 
-def _tela_credenciais(cfg: dict) -> dict:
+def _tela_credenciais(cfg):
     from nucleo.interface import tela_config_credenciais
     return tela_config_credenciais(cfg)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # AUTENTICAÇÃO
@@ -364,24 +388,30 @@ def _autenticar(cfg: dict) -> bool:
     except Exception:
         return False
 
+
 # ══════════════════════════════════════════════════════════════════════════════
 # MODO --auto  (serviço systemd)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def modo_auto(cfg: dict):
+    import atexit
+    atexit.register(_remover_pid)
+
     print(f"[{agora()}] MoonShield Firewall Sensor v{VERSION} — modo automatico")
     print(f"[{agora()}] MoonShield : {cfg['Moon_url']}")
     print(f"[{agora()}] Sensor     : {cfg['sensor_nome']}")
 
     if not cfg.get("Moon_url"):
-        print(f"[{agora()}] ERRO: URL nao configurada."); sys.exit(1)
+        print(f"[{agora()}] ERRO: URL nao configurada.")
+        sys.exit(1)
 
     fw_status = obter_status()
     if not fw_status["instalado"]:
         print(f"[{agora()}] Instalando regras nftables automaticamente...")
         ok, msg = instalar_regras()
         if not ok:
-            print(f"[{agora()}] ERRO: {msg}"); sys.exit(1)
+            print(f"[{agora()}] ERRO: {msg}")
+            sys.exit(1)
         print(f"[{agora()}] {msg}")
 
     if cfg.get("Moon_usuario") and cfg.get("Moon_senha"):
@@ -391,19 +421,15 @@ def modo_auto(cfg: dict):
 
     stop = threading.Event()
 
-    # Inicia agente HTTP local
     iniciar_agente(cfg, stop)
     print(f"[{agora()}] Agente HTTP iniciado na porta {cfg.get('agente_porta', 8765)}.")
 
-    # Inicia monitoramento de logs
     fw_mon.iniciar_monitoramento(cfg, stop, _session, _session_lock)
     print(f"[{agora()}] Monitoramento de logs iniciado.")
 
-    # Inicia sincronizador de regras
     fw_sync.iniciar_sincronizador(cfg, stop, _session, _session_lock)
     print(f"[{agora()}] Sincronizador de regras iniciado (poll 30s).")
 
-    # Inicia dashboard TUI
     stats_fn = {
         "monitoramento": fw_mon.obter_stats,
         "sincronizador": fw_sync.obter_stats,
@@ -425,6 +451,7 @@ def modo_auto(cfg: dict):
         print(f"\n[{agora()}] Encerrado.")
         sys.exit(0)
 
+
 # ══════════════════════════════════════════════════════════════════════════════
 # ENTRY POINT
 # ══════════════════════════════════════════════════════════════════════════════
@@ -433,6 +460,13 @@ def main():
     if not is_root():
         print("\n  [!] Execute como root: sudo venv/bin/python3 ms_firewall.py\n")
         sys.exit(1)
+
+    # Impede múltiplas instâncias — cria /tmp/ms_firewall.pid
+    _verificar_pid()
+
+    # Remove PID ao sair normalmente
+    import atexit
+    atexit.register(_remover_pid)
 
     cfg = carregar_config()
 
