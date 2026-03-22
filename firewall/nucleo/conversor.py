@@ -77,51 +77,44 @@ def preview_regra(regra: dict, iface_map: dict | None = None) -> str:
 
 
 def gerar_script_nft(rules: list[dict], iface_map: dict | None = None) -> str:
-    from datetime import datetime
+    """
+    Gera script nft que:
+    1. Garante que a tabela e chains existam (add — não falha se já existir)
+    2. Faz flush apenas na chain ms_rules
+    3. Reinserere todas as regras em ordem de prioridade
 
-    linhas = [
-        f"# MoonShield — Regras sincronizadas em {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-        f"# Total: {len(rules)} regras",
-        "",
-        "table inet moonshield {",
-        "",
-        "    chain ms_input {",
-        "        type filter hook input priority 0; policy accept;",
-        "        jump ms_emergency",
-        "        jump ms_rules",
-        '        log prefix "MS-INPUT: " flags all',
-        "    }",
-        "",
-        "    chain ms_forward {",
-        "        type filter hook forward priority 0; policy accept;",
-        "        jump ms_emergency",
-        "        jump ms_rules",
-        '        log prefix "MS-FWD: " flags all',
-        "    }",
-        "",
-        "    chain ms_emergency {",
-        "    }",
-        "",
-        "    chain ms_rules {",
-        "    }",
-        "",
-        "}",
-        "",
-        "flush chain inet moonshield ms_rules",
-        "",
-    ]
+    Nunca usa 'table { }' pois recriar uma tabela existente causa erro no nft.
+    """
+    from datetime import datetime
 
     regras_ativas = sorted(
         [r for r in rules if r.get("enabled", True)],
         key=lambda x: x.get("priority", 500),
     )
 
+    linhas = [
+        f"# MoonShield — Regras sincronizadas em {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"# Total: {len(regras_ativas)} regras ativas",
+        "",
+        # Garante existência da tabela e chains sem falhar se já existirem
+        "add table inet moonshield",
+        "",
+        "add chain inet moonshield ms_emergency { type filter hook input priority -10; policy accept; }",
+        "add chain inet moonshield ms_rules",
+        "add chain inet moonshield ms_input { type filter hook input priority 0; policy accept; }",
+        "add chain inet moonshield ms_forward { type filter hook forward priority 0; policy accept; }",
+        "",
+        # Limpa só as regras — não toca na estrutura
+        "flush chain inet moonshield ms_rules",
+        "",
+    ]
+
     for r in regras_ativas:
         expr = regra_para_nft_inline(r, iface_map)
         if expr:
             desc = r.get("desc", "")
             prio = r.get("priority", "?")
-            linhas.append(f'add rule inet moonshield ms_rules {expr}  # [{prio}] {desc}')
+            linhas.append(f"add rule inet moonshield ms_rules {expr}  # [{prio}] {desc}")
 
     linhas.append("")
     return "\n".join(linhas)

@@ -7,6 +7,8 @@ Quando há pendentes: gera script nft → aplica → confirma no Django.
 
 v2: corrige import typo (nucelo→nucleo), hash para evitar reaplicação
     desnecessária, contagem de regras ativas após apply, stats ricos.
+v3: hash agora inclui conteúdo das regras (action, src, port, priority,
+    enabled) — antes usava só IDs, então edições não disparavam reaplicação.
 ──────────────────────────────────────────────────────────────────────
 """
 
@@ -17,7 +19,7 @@ import threading
 import time
 import logging
 
-from firewall.nucleo.conversor import gerar_script_nft, validar_iface_map   # fix: nucelo → nucleo
+from firewall.nucleo.conversor import gerar_script_nft, validar_iface_map
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +27,7 @@ logger = logging.getLogger(__name__)
 # CONSTANTES
 # ══════════════════════════════════════════════════════════════════════════════
 
-VERSAO_SINCRONIZADOR = "2.0"
+VERSAO_SINCRONIZADOR = "3.0"
 POLL_INTERVAL        = 30
 PENDING_PATH         = "/firewall/api/pending-rules/"
 CONFIRM_PATH         = "/firewall/api/confirm-rules/"
@@ -57,6 +59,20 @@ _hash_regras_aplicadas: str | None = None
 def _agora():
     from datetime import datetime
     return datetime.now().strftime("%H:%M:%S")
+
+
+def _hash_conteudo_regras(rules: list) -> str:
+    """
+    Hash baseado no conteúdo real das regras — não só nos IDs.
+    Detecta mudanças em action, src, port, priority, enabled, iface, proto, dst.
+    """
+    chave = sorted(
+        f"{r.get('id')}|{r.get('action')}|{r.get('src')}|{r.get('dst')}|"
+        f"{r.get('port')}|{r.get('priority')}|{r.get('enabled')}|"
+        f"{r.get('iface')}|{r.get('proto')}|{r.get('dir')}"
+        for r in rules
+    )
+    return hashlib.md5(str(chave).encode()).hexdigest()
 
 
 def obter_stats() -> dict:
@@ -114,7 +130,6 @@ def _loop_sincronizador(cfg: dict, parar: threading.Event,
 
     while not parar.is_set():
         try:
-            # Relê iface_map a cada iteração — reflete o que _detectar_interfaces salvou
             iface_map = cfg.get("iface_map", {"WAN": "eth0", "LAN": "eth1", "VPN": "tun0"})
             _poll_e_aplicar(pending_url, confirm_url, headers, iface_map,
                             session, session_lock, cfg)
@@ -167,10 +182,8 @@ def _poll_e_aplicar(pending_url, confirm_url, headers, iface_map,
     im_remoto = data.get("iface_map", {})
     iface_final = {**im_remoto, **iface_map}  # local tem prioridade
 
-    # v2: skip se as regras são as mesmas da aplicação anterior
-    hash_atual = hashlib.md5(
-        str(sorted(r.get("id", 0) for r in rules)).encode()
-    ).hexdigest()
+    # v3: hash baseado no conteúdo das regras, não só IDs
+    hash_atual = _hash_conteudo_regras(rules)
 
     if hash_atual == _hash_regras_aplicadas:
         with _sync_lock:
@@ -194,7 +207,6 @@ def _poll_e_aplicar(pending_url, confirm_url, headers, iface_map,
             _hash_regras_aplicadas = hash_atual
             _sync_stats["aplicacoes"]   += 1
             _sync_stats["ultimo_apply"]  = _agora()
-            # v2: conta regras ativas no nft após apply
             _sync_stats["regras_ativas"] = _contar_regras_ativas()
             _sync_stats["ultima_versao"] = _agora()
         else:
@@ -215,6 +227,8 @@ def _aplicar_regras(rules: list, iface_map: dict) -> tuple[bool, str]:
         if result.returncode != 0:
             err = (result.stderr or result.stdout or "erro desconhecido").strip()
             logger.error(f"[sync] nft -f falhou: {err}")
+            # Loga o script para debug
+            logger.error(f"[sync] Script que falhou:\n{script}")
             return False, f"nft error: {err[:200]}"
 
         if rules:
