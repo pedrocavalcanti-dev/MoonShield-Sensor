@@ -33,10 +33,13 @@ from nucleo.interface    import (
     C_TITULO, C_WHITE, C_DIM, C_OK, C_ERRO, C_AVISO,
     C_MENU_TXT, C_NEON_DIM, C_BORDA, C_NORMAL,
 )
-from firewall.nucleo.instalador   import obter_status, instalar_regras
-from firewall.interface.interface    import tela_firewall
+from firewall.nucleo.instalador       import obter_status, instalar_regras
+from firewall.interface.interface     import tela_firewall
 import firewall.monitoramento.monitoramento as fw_mon
 import firewall.monitoramento.sincronizador as fw_sync
+from firewall.agente.agente           import iniciar_agente, parar_agente, obter_stats as agente_stats
+from firewall.agente.dashboard        import iniciar_dashboard, parar_dashboard
+import firewall.monitoramento.autoban as fw_ban
 
 # ══════════════════════════════════════════════════════════════════════════════
 # BOOT
@@ -44,15 +47,18 @@ import firewall.monitoramento.sincronizador as fw_sync
 
 _BOOT_LINES_FW = [
     ("MOONSHIELD FIREWALL SENSOR v{ver}",        "\033[96m\033[1m", 0.04),
-    ("Inicializando modulos...",                  "\033[37m\033[2m", 0.03),
+    ("Inicializando modulos...",                 "\033[37m\033[2m", 0.03),
     ("[OK] nucleo.configuracao        carregado", "\033[92m\033[1m", 0.02),
-    ("[OK] nucleo.interface           pronto",    "\033[92m\033[1m", 0.02),
+    ("[OK] nucleo.interface          pronto",    "\033[92m\033[1m", 0.02),
     ("[OK] firewall.instalador        pronto",    "\033[92m\033[1m", 0.02),
     ("[OK] firewall.analisador        pronto",    "\033[92m\033[1m", 0.02),
     ("[OK] firewall.monitoramento     standby",   "\033[92m\033[1m", 0.02),
     ("[OK] firewall.sincronizador     standby",   "\033[92m\033[1m", 0.02),
-    ("Verificando nftables...",                   "\033[37m\033[2m", 0.03),
-    ("Conectando ao MOONSHIELD...",               "\033[37m\033[2m", 0.05),
+    ("[OK] firewall.agente.agente      standby",   "\033[92m\033[1m", 0.02),
+    ("[OK] firewall.agente.dashboard   standby",   "\033[92m\033[1m", 0.02),
+    ("[OK] firewall.monitoramento.autoban standby","\033[92m\033[1m", 0.02),
+    ("Verificando nftables...",                  "\033[37m\033[2m", 0.03),
+    ("Conectando ao MOONSHIELD...",              "\033[37m\033[2m", 0.05),
 ]
 
 def _boot_firewall(cfg: dict):
@@ -156,13 +162,17 @@ def menu_firewall(cfg: dict):
         mon_tag  = "[RODANDO]"  if mon_rodando  else ""
         sync_tag = "[RODANDO]"  if sync_rodando else ""
 
+        ag_stats    = agente_stats()
+        ag_rodando  = ag_stats["rodando"]
+        ag_tag      = f"[ATIVO :{ag_stats['porta']}]" if ag_rodando else ""
+
         linha_texto("  --- Operacao -----------------------------------------------", C_NEON_DIM)
         linha_texto(
             f"  [0]  >>  Instalar regras nftables  {fw_tag}",
             C_MENU_TXT if fw_instalado else C_AVISO,
         )
         linha_texto(
-            f"  [1]  >>  Iniciar monitoramento + sync  {mon_tag}",
+            f"  [1]  >>  Iniciar monitoramento + sync + agente  {mon_tag}",
             C_OK if mon_rodando else C_WHITE,
         )
         linha_vazia()
@@ -250,36 +260,43 @@ def _tela_monitoramento(cfg: dict):
     global _stop_event
     _stop_event = threading.Event()
 
+    # Inicia agente HTTP local (:8765)
+    linha_texto("  Iniciando agente HTTP (:8765)...", C_DIM)
+    iniciar_agente(cfg, _stop_event)
+
+    # Inicia autoban
+    from firewall.monitoramento.autoban import registrar_evento as _ban_ev
+    linha_texto("  Auto-ban ativo.", C_DIM)
+
     # Inicia monitoramento de logs
     fw_mon.iniciar_monitoramento(cfg, _stop_event, _session, _session_lock)
 
     # Inicia sincronizador de regras (poll Django → nft)
     fw_sync.iniciar_sincronizador(cfg, _stop_event, _session, _session_lock)
 
-    # Loop de display no terminal
+    # Substitui o loop de print pelo dashboard
+    stats_fn = {
+        "monitoramento": fw_mon.obter_stats,
+        "sincronizador": fw_sync.obter_stats,
+        "autoban":       fw_ban.obter_stats,
+        "agente":        agente_stats,
+    }
     try:
+        iniciar_dashboard(cfg, _stop_event, stats_fn)
+        # Aguarda Ctrl+C — o dashboard roda em thread
         while not _stop_event.is_set():
-            mon_stats  = fw_mon.obter_stats()
-            sync_stats = fw_sync.obter_stats()
-            print(
-                f"\r  {C_DIM}logs→ vistos:{C_WHITE}{mon_stats['vistos']:>6,}  "
-                f"{C_DIM}env:{C_OK}{mon_stats['enviados']:>6,}  "
-                f"{C_DIM}err:{C_ERRO}{mon_stats['erros']:>3,}  "
-                f"{C_DIM}| regras→ polls:{C_WHITE}{sync_stats['aplicacoes']:>3}  "
-                f"{C_DIM}err:{C_ERRO}{sync_stats['erros']:>2}  "
-                f"{C_DIM}ultimo:{C_WHITE}{sync_stats['ultimo_apply']:<10}{C_NORMAL}",
-                end="", flush=True,
-            )
             time.sleep(0.5)
     except KeyboardInterrupt:
         pass
     finally:
         if _stop_event:
             _stop_event.set()
+        parar_dashboard()
+        parar_agente()
         fw_mon.parar_monitoramento()
         fw_sync.parar_sincronizador()
         print()
-        print_resultado(True, "Monitoramento e sincronizador encerrados.")
+        print_resultado(True, "Todos os modulos encerrados.")
         aguardar_enter()
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -361,10 +378,11 @@ def modo_auto(cfg: dict):
 
     fw_status = obter_status()
     if not fw_status["instalado"]:
-        print(f"[{agora()}] ERRO: regras nftables nao instaladas.")
-        print(f"[{agora()}] Execute: sudo venv/bin/python3 ms_firewall.py")
-        print(f"[{agora()}] Use a opcao [0] para instalar as regras.")
-        sys.exit(1)
+        print(f"[{agora()}] Instalando regras nftables automaticamente...")
+        ok, msg = instalar_regras()
+        if not ok:
+            print(f"[{agora()}] ERRO: {msg}"); sys.exit(1)
+        print(f"[{agora()}] {msg}")
 
     if cfg.get("Moon_usuario") and cfg.get("Moon_senha"):
         print(f"[{agora()}] Autenticando como {cfg['Moon_usuario']}...")
@@ -373,6 +391,10 @@ def modo_auto(cfg: dict):
 
     stop = threading.Event()
 
+    # Inicia agente HTTP local
+    iniciar_agente(cfg, stop)
+    print(f"[{agora()}] Agente HTTP iniciado na porta {cfg.get('agente_porta', 8765)}.")
+
     # Inicia monitoramento de logs
     fw_mon.iniciar_monitoramento(cfg, stop, _session, _session_lock)
     print(f"[{agora()}] Monitoramento de logs iniciado.")
@@ -380,25 +402,24 @@ def modo_auto(cfg: dict):
     # Inicia sincronizador de regras
     fw_sync.iniciar_sincronizador(cfg, stop, _session, _session_lock)
     print(f"[{agora()}] Sincronizador de regras iniciado (poll 30s).")
-    print(f"[{agora()}] Ctrl+C para parar.")
 
-    def _log_stats():
-        while True:
-            time.sleep(60)
-            m = fw_mon.obter_stats()
-            s = fw_sync.obter_stats()
-            print(
-                f"[{agora()}] logs | vistos={m['vistos']} enviados={m['enviados']} erros={m['erros']} | "
-                f"sync | aplicacoes={s['aplicacoes']} erros={s['erros']} ultimo={s['ultimo_apply']}",
-                flush=True,
-            )
-    threading.Thread(target=_log_stats, daemon=True).start()
+    # Inicia dashboard TUI
+    stats_fn = {
+        "monitoramento": fw_mon.obter_stats,
+        "sincronizador": fw_sync.obter_stats,
+        "autoban":       fw_ban.obter_stats,
+        "agente":        agente_stats,
+    }
+    iniciar_dashboard(cfg, stop, stats_fn)
+    print(f"[{agora()}] Dashboard iniciado. Ctrl+C para parar.")
 
     try:
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
         stop.set()
+        parar_dashboard()
+        parar_agente()
         fw_mon.parar_monitoramento()
         fw_sync.parar_sincronizador()
         print(f"\n[{agora()}] Encerrado.")
