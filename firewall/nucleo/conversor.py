@@ -2,11 +2,6 @@
 firewall/nucleo/conversor.py
 ──────────────────────────────────────────────────────────────────────
 Converte dicts de regras do Django/MoonShield em comandos nft.
-
-v4: regras DENY agora usam "log prefix "MS-DROP: " flags all counter drop"
-    em vez de só "drop" — isso faz o nft logar cada pacote bloqueado
-    no journald com prefixo MS-DROP: para o sensor capturar e enviar
-    ao Django como evento DROP visível no dashboard.
 ──────────────────────────────────────────────────────────────────────
 """
 
@@ -21,11 +16,6 @@ IFACE_MAP_DEFAULT = {
 
 
 def regra_para_nft_inline(regra: dict, iface_map: dict | None = None) -> str | None:
-    """
-    Ordem obrigatória no nft: iface → ip saddr → ip daddr → proto → dport → ação
-    ICMP precisa de "ip protocol icmp" — não pode ser só "icmp" em regras IPv4.
-    DENY usa log antes de drop para aparecer no dashboard.
-    """
     im     = {**IFACE_MAP_DEFAULT, **(iface_map or {})}
     partes = []
 
@@ -36,17 +26,17 @@ def regra_para_nft_inline(regra: dict, iface_map: dict | None = None) -> str | N
         direcao = "iifname" if regra.get("dir", "in") == "in" else "oifname"
         partes.append(f'{direcao} "{iface_nome}"')
 
-    # 2. IP de origem (ANTES do proto)
+    # 2. IP origem
     src = (regra.get("src") or "any").strip()
     if src and src != "any":
         partes.append(f"ip saddr {src}")
 
-    # 3. IP de destino (ANTES do proto)
+    # 3. IP destino
     dst = (regra.get("dst") or "any").strip()
     if dst and dst != "any":
         partes.append(f"ip daddr {dst}")
 
-    # 4. Protocolo (APÓS saddr/daddr)
+    # 4. Protocolo
     proto = (regra.get("proto") or "any").lower()
     if proto == "icmp":
         partes.append("ip protocol icmp")
@@ -62,11 +52,11 @@ def regra_para_nft_inline(regra: dict, iface_map: dict | None = None) -> str | N
         else:
             partes.append(f"dport {port}")
 
-    # 6. Ação — DENY loga antes de dropar para aparecer no dashboard
+    # 6. Ação
     if regra.get("action") == "allow":
         partes.append("accept")
     else:
-        partes.append('log prefix "MS-DROP: " flags all counter drop')
+        partes.append("drop")
 
     return " ".join(partes)
 
@@ -87,12 +77,6 @@ def preview_regra(regra: dict, iface_map: dict | None = None) -> str:
 
 
 def gerar_script_nft(rules: list[dict], iface_map: dict | None = None) -> str:
-    """
-    Gera script nft seguro:
-    - add table / add chain não falham se já existirem
-    - NÃO recria chains com 'type filter hook' (causaria erro)
-    - flush só na ms_rules, depois reinserere em ordem de prioridade
-    """
     from datetime import datetime
 
     regras_ativas = sorted(
@@ -114,9 +98,7 @@ def gerar_script_nft(rules: list[dict], iface_map: dict | None = None) -> str:
     for r in regras_ativas:
         expr = regra_para_nft_inline(r, iface_map)
         if expr:
-            desc = r.get("desc", "")
-            prio = r.get("priority", "?")
-            linhas.append(f"add rule inet moonshield ms_rules {expr}  # [{prio}] {desc}")
+            linhas.append(f"add rule inet moonshield ms_rules {expr}")
 
     linhas.append("")
     return "\n".join(linhas)
