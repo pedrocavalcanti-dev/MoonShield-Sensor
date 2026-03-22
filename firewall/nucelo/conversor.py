@@ -1,5 +1,5 @@
 """
-firewall/conversor.py
+firewall/nucleo/conversor.py
 ──────────────────────────────────────────────────────────────────────
 Converte dicts de regras do Django/MoonShield em comandos nft.
 ──────────────────────────────────────────────────────────────────────
@@ -8,7 +8,6 @@ Converte dicts de regras do Django/MoonShield em comandos nft.
 from __future__ import annotations
 
 # Default usado apenas quando nenhum iface_map é passado.
-# Nunca sobrescreve o que veio do config.
 IFACE_MAP_DEFAULT = {
     "WAN": "eth0",
     "LAN": "eth1",
@@ -18,11 +17,12 @@ IFACE_MAP_DEFAULT = {
 
 
 def regra_para_nft_inline(regra: dict, iface_map: dict | None = None) -> str | None:
+    """Gera expressão nft de uma regra. Retorna None se inválida."""
     im     = {**IFACE_MAP_DEFAULT, **(iface_map or {})}
     partes = []
 
     iface      = regra.get("iface", "any")
-    iface_nome = im.get(iface, "")
+    iface_nome = im.get(iface, iface if iface != "any" else "")
     if iface_nome:
         direcao = "iifname" if regra.get("dir", "in") == "in" else "oifname"
         partes.append(f'{direcao} "{iface_nome}"')
@@ -49,6 +49,31 @@ def regra_para_nft_inline(regra: dict, iface_map: dict | None = None) -> str | N
 
     partes.append("accept" if regra.get("action") == "allow" else "drop")
     return " ".join(partes)
+
+
+def preview_regra(regra: dict, iface_map: dict | None = None) -> str:
+    """
+    Versão legível para humanos — usada na coluna 'Preview nft' do painel.
+    ex: enp0s3  TCP:22  DROP
+        any  UDP:53  ACCEPT
+    """
+    im    = {**IFACE_MAP_DEFAULT, **(iface_map or {})}
+    iface = regra.get("iface", "any")
+    nome  = im.get(iface, iface if iface != "any" else "any")
+
+    proto = (regra.get("proto") or "any").upper()
+    port  = str(regra.get("port") or "any").strip()
+    acao  = "ACCEPT" if regra.get("action") == "allow" else "DROP"
+
+    proto_port = f"{proto}:{port}" if port != "any" else proto
+
+    partes = [nome, proto_port, acao]
+
+    src = (regra.get("src") or "any").strip()
+    if src and src != "any":
+        partes.insert(0, f"src:{src}")
+
+    return "  ".join(partes)
 
 
 def gerar_script_nft(rules: list[dict], iface_map: dict | None = None) -> str:
@@ -105,20 +130,12 @@ def gerar_script_nft(rules: list[dict], iface_map: dict | None = None) -> str:
 def validar_iface_map(iface_map: dict) -> list[str]:
     """
     Valida se as interfaces mapeadas existem no sistema.
-
-    Só avisa quando:
-    - o valor não está vazio (interface realmente configurada)
-    - a lógica não é 'any' (entrada de fallback)
-    - o arquivo /sys/class/net/<nome> não existe
-
-    Interfaces ausentes do iface_map (ex: VPN não configurada) são
-    silenciosamente ignoradas — sem aviso desnecessário.
+    Só avisa quando o valor não está vazio e a interface não existe.
     """
     import os
     avisos = []
     for logico, real in iface_map.items():
         if not real or logico == "any":
-            # Valor vazio ou entrada de fallback — sem aviso
             continue
         if not os.path.exists(f"/sys/class/net/{real}"):
             avisos.append(

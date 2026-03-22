@@ -1,14 +1,14 @@
 """
-firewall/monitoramento.py
+firewall/monitoramento/monitoramento.py
 ──────────────────────────────────────────────────────────────────────
 Loop de monitoramento do firewall.
 
-Lê o journald em tempo real via 'journalctl -f -k -g MS-FWD',
+Lê o journald em tempo real via 'journalctl -f -k -g MS-',
 parseia cada linha com analisador.py e envia lotes HTTP para
 /firewall/api/ingest/ no MoonShield.
 
-Usa a mesma sessão autenticada (_session, _session_lock) e o mesmo
-_stats do nucleo/monitoramento.py — sem duplicar estado.
+v2: corrige import typo (nucelo→nucleo), contadores drops/allows,
+    heartbeat periódico a cada 5 min, VERSAO_MONITORAMENTO.
 ──────────────────────────────────────────────────────────────────────
 """
 
@@ -19,27 +19,32 @@ import time
 
 from nucleo.utilitarios import agora
 from nucleo.configuracao import salvar_config
-from firewall.analisador import parsear_linha
+from firewall.nucleo.analisador import parsear_linha   # fix: nucelo → nucleo
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CONSTANTES
 # ══════════════════════════════════════════════════════════════════════════════
 
-BATCH_SIZE    = 20
-BATCH_TIMEOUT = 5      # segundos — mesmo padrão do monitoramento IDS
-INGEST_PATH   = "/firewall/api/ingest/"
+VERSAO_MONITORAMENTO = "2.0"
+BATCH_SIZE           = 20
+BATCH_TIMEOUT        = 5      # segundos
+HEARTBEAT_INTERVAL   = 300    # 5 minutos — mantém last_seen atualizado no Django
+INGEST_PATH          = "/firewall/api/ingest/"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ESTADO LOCAL DO FIREWALL
 # ══════════════════════════════════════════════════════════════════════════════
 
 _fw_stats = {
-    "vistos":   0,
-    "enviados": 0,
-    "erros":    0,
-    "buffer":   0,
-    "ultimo":   "—",
-    "rodando":  False,
+    "vistos":         0,
+    "enviados":       0,
+    "erros":          0,
+    "buffer":         0,
+    "ultimo":         "—",
+    "rodando":        False,
+    "drops_sessao":   0,
+    "allows_sessao":  0,
+    "ultimo_src_ip":  "—",
 }
 _fw_stats_lock = threading.Lock()
 
@@ -48,7 +53,6 @@ _fw_stats_lock = threading.Lock()
 # ══════════════════════════════════════════════════════════════════════════════
 
 def obter_stats() -> dict:
-    """Retorna cópia do estado atual. Usado pelo menu para exibir info."""
     with _fw_stats_lock:
         return dict(_fw_stats)
 
@@ -60,16 +64,11 @@ def esta_rodando() -> bool:
 
 def iniciar_monitoramento(cfg: dict, parar: threading.Event,
                           session, session_lock) -> threading.Thread:
-    """
-    Inicia o loop do firewall em thread separada.
-    Recebe a session e session_lock do nucleo/monitoramento para
-    reutilizar a mesma conexão autenticada.
-    Retorna a thread iniciada.
-    """
     with _fw_stats_lock:
         _fw_stats.update({
-            "vistos": 0, "enviados": 0, "erros": 0,
-            "buffer": 0, "ultimo": "—", "rodando": True,
+            "vistos": 0, "enviados": 0, "erros": 0, "buffer": 0,
+            "ultimo": "—", "rodando": True,
+            "drops_sessao": 0, "allows_sessao": 0, "ultimo_src_ip": "—",
         })
 
     t = threading.Thread(
@@ -82,7 +81,6 @@ def iniciar_monitoramento(cfg: dict, parar: threading.Event,
 
 
 def parar_monitoramento():
-    """Marca o estado como parado (o evento de parada é controlado externamente)."""
     with _fw_stats_lock:
         _fw_stats["rodando"] = False
 
@@ -93,11 +91,9 @@ def parar_monitoramento():
 def _detectar_interfaces(cfg: dict) -> list:
     """
     Detecta interfaces de rede reais do Linux via /sys/class/net/.
-    Também atualiza iface_map no config automaticamente usando
-    interface_wan e interface_lan que o wizard já salvou.
-
     Considera UP: operstate == 'up' OU interface tem IP atribuído
     (interfaces em modo PROMISC reportam operstate 'unknown' mesmo ativas).
+    Também atualiza iface_map usando interface_wan/interface_lan do wizard.
     """
     interfaces = []
     try:
@@ -118,21 +114,13 @@ def _detectar_interfaces(cfg: dict) -> list:
                 with open(f'/sys/class/net/{nome}/operstate') as f:
                     state = f.read().strip()
 
-                # PROMISC interfaces reportam 'unknown' mesmo quando ativas
-                # considera UP se operstate é 'up' OU se tem IP atribuído
                 up = (state == 'up') or bool(ip)
-
-                interfaces.append({
-                    'nome': nome,
-                    'ip':   ip,
-                    'up':   up,
-                })
+                interfaces.append({'nome': nome, 'ip': ip, 'up': up})
             except Exception:
                 pass
     except Exception:
         pass
 
-    # Atualiza iface_map automaticamente usando o que o wizard já salvou
     wan = cfg.get('interface_wan', '')
     lan = cfg.get('interface_lan', '')
     if wan or lan:
@@ -152,24 +140,19 @@ def _detectar_interfaces(cfg: dict) -> list:
 
 def _loop_firewall(cfg: dict, parar: threading.Event,
                    session, session_lock):
-    """
-    Lê journalctl -f em tempo real e envia eventos em lotes.
-    Manda heartbeat inicial para registrar o sensor mesmo sem eventos.
-    Para quando parar.is_set().
-    """
     ingest_url = cfg["Moon_url"].rstrip("/") + INGEST_PATH
     sensor     = cfg["sensor_nome"]
     buffer     = []
     ultimo_env = time.time()
 
-    # ── Heartbeat inicial — detecta interfaces e registra o sensor ───────────
-    # Garante que o Sensor aparece nas configurações antes do primeiro evento
+    # Heartbeat inicial — detecta interfaces e registra o sensor
     cfg['interfaces'] = _detectar_interfaces(cfg)
     _enviar(ingest_url, sensor, [], cfg, session, session_lock)
+    ultimo_heartbeat = time.time()
 
     cmd = [
         "journalctl", "-f", "-k", "-o", "short",
-        "--grep", "MS-FWD",
+        "--grep", "MS-",
         "--no-pager",
     ]
 
@@ -189,6 +172,12 @@ def _loop_firewall(cfg: dict, parar: threading.Event,
 
     try:
         while not parar.is_set():
+
+            # Heartbeat periódico — mantém last_seen atualizado no Django
+            if time.time() - ultimo_heartbeat >= HEARTBEAT_INTERVAL:
+                _enviar(ingest_url, sensor, [], cfg, session, session_lock)
+                ultimo_heartbeat = time.time()
+
             linha = proc.stdout.readline()
 
             if not linha:
@@ -212,6 +201,13 @@ def _loop_firewall(cfg: dict, parar: threading.Event,
 
             with _fw_stats_lock:
                 _fw_stats["vistos"] += 1
+                # v2: contadores por ação
+                acao = evento.get("acao", "").upper()
+                if acao in ("DROP", "DENY", "REJECT"):
+                    _fw_stats["drops_sessao"] += 1
+                elif acao in ("LOG", "ALLOW", "ACCEPT"):
+                    _fw_stats["allows_sessao"] += 1
+                _fw_stats["ultimo_src_ip"] = evento.get("src_ip", "—")
 
             buffer.append(evento)
             with _fw_stats_lock:
@@ -245,16 +241,8 @@ def _loop_firewall(cfg: dict, parar: threading.Event,
 
 def _enviar(url: str, sensor: str, buffer: list,
             cfg: dict, session, session_lock) -> bool:
-    """
-    Envia lote de eventos para /firewall/api/ingest/.
-    Mesmo padrão do _enviar() em nucleo/monitoramento.py.
-    Heartbeats (buffer vazio) incluem as interfaces detectadas.
-    """
     try:
-        payload = {
-            "sensor":  sensor,
-            "eventos": buffer,
-        }
+        payload = {"sensor": sensor, "eventos": buffer}
         if not buffer:
             payload["interfaces"] = cfg.get("interfaces", [])
 

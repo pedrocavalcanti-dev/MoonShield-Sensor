@@ -1,9 +1,12 @@
 """
-firewall/autoban.py
+firewall/monitoramento/autoban.py
 ──────────────────────────────────────────────────────────────────────
-Auto-ban emergencial: monitora eventos do journald e bane IPs
-que atingirem o threshold localmente via nft, sem esperar o Django.
+Auto-ban emergencial: monitora eventos e bane IPs que atingirem
+o threshold localmente via nft, sem esperar o Django.
 Em seguida sobe o bloqueio para o Django via /firewall/api/autoban/.
+
+v2: stats ricos (bans_sessao, ultimo_motivo, ips_ativos),
+    listar_bans_ativos(), VERSAO_AUTOBAN.
 ──────────────────────────────────────────────────────────────────────
 """
 
@@ -16,39 +19,59 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-AUTOBAN_PATH = "/firewall/api/autoban/"
+# ══════════════════════════════════════════════════════════════════════════════
+# CONSTANTES
+# ══════════════════════════════════════════════════════════════════════════════
 
-# Thresholds padrão — sobrescritos pelo config.json se tiver campo "autoban"
+VERSAO_AUTOBAN = "2.0"
+AUTOBAN_PATH   = "/firewall/api/autoban/"
+
 DEFAULTS = {
-    "habilitado":      True,
-    "janela_seg":      30,    # janela de tempo para contar hits
-    "threshold":       15,    # hits dentro da janela para disparar ban
-    "expire_seg":      3600,  # duração do ban emergencial (0 = permanente)
-    "portas_sensiveis": [22, 23, 3389, 5900],  # peso dobrado nessas portas
+    "habilitado":       True,
+    "janela_seg":       30,
+    "threshold":        15,
+    "expire_seg":       3600,
+    "portas_sensiveis": [22, 23, 3389, 5900],
 }
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ESTADO
+# ══════════════════════════════════════════════════════════════════════════════
 
 _ban_stats = {
-    "total_bans":  0,
-    "ultimo_ban":  "—",
-    "ultimo_ip":   "—",
+    "total_bans":    0,
+    "bans_sessao":   0,
+    "ultimo_ban":    "—",
+    "ultimo_ip":     "—",
+    "ultimo_motivo": "—",
 }
-_ban_lock     = threading.Lock()
-_bans_ativos  = set()          # IPs já banados nesta sessão
-_hit_counter  = defaultdict(list)  # ip → [timestamps]
+_ban_lock    = threading.Lock()
+_bans_ativos = set()               # IPs já banados nesta sessão
+_hit_counter = defaultdict(list)   # ip → [timestamps]
 _counter_lock = threading.Lock()
 
+# ══════════════════════════════════════════════════════════════════════════════
+# INTERFACE PÚBLICA
+# ══════════════════════════════════════════════════════════════════════════════
 
 def obter_stats() -> dict:
+    """v2: inclui ips_ativos calculado em tempo real."""
     with _ban_lock:
-        return dict(_ban_stats)
+        return {**_ban_stats, "ips_ativos": len(_bans_ativos)}
+
+
+def listar_bans_ativos() -> list:
+    """Retorna lista de IPs atualmente banados nesta sessão."""
+    with _ban_lock:
+        return list(_bans_ativos)
 
 
 def registrar_evento(ev: dict, cfg: dict, session, session_lock):
     """
     Chamado pelo monitoramento.py a cada evento recebido.
-    Verifica se o IP atingiu o threshold e bane se necessário.
+    Verifica threshold e bane se necessário.
     """
-    ab_cfg    = {**DEFAULTS, **cfg.get("autoban", {})}
+    ab_cfg = {**DEFAULTS, **cfg.get("autoban", {})}
     if not ab_cfg["habilitado"]:
         return
 
@@ -56,7 +79,6 @@ def registrar_evento(ev: dict, cfg: dict, session, session_lock):
     if not src_ip or src_ip in _bans_ativos:
         return
 
-    # Ignora IPs privados
     if _ip_privado(src_ip):
         return
 
@@ -65,33 +87,32 @@ def registrar_evento(ev: dict, cfg: dict, session, session_lock):
     peso   = 2 if ev.get("dst_port") in ab_cfg["portas_sensiveis"] else 1
 
     with _counter_lock:
-        # Remove hits fora da janela
         _hit_counter[src_ip] = [t for t in _hit_counter[src_ip] if agora - t < janela]
-        # Adiciona hit atual (peso = quantos "hits" conta)
         _hit_counter[src_ip].extend([agora] * peso)
         total_hits = len(_hit_counter[src_ip])
 
     if total_hits >= ab_cfg["threshold"]:
         _executar_ban(src_ip, total_hits, janela, ev, ab_cfg, cfg, session, session_lock)
 
+# ══════════════════════════════════════════════════════════════════════════════
+# BAN
+# ══════════════════════════════════════════════════════════════════════════════
 
 def _executar_ban(ip, hits, janela, ev, ab_cfg, cfg, session, session_lock):
-    """Ban local imediato + notificação ao Django."""
     with _ban_lock:
         if ip in _bans_ativos:
             return
         _bans_ativos.add(ip)
 
-    logger.warning(f"[autoban] Banindo {ip} — {hits} hits em {janela}s")
+    motivo = _detectar_motivo(ev)
+    logger.warning(f"[autoban] Banindo {ip} — {hits} hits em {janela}s | motivo: {motivo}")
 
-    # Ban local via nft na chain ms_emergency (sem esperar Django)
     ok_nft, msg_nft = _ban_nft(ip, ab_cfg)
     if ok_nft:
         logger.info(f"[autoban] {ip} banido via nft ✓")
     else:
         logger.error(f"[autoban] Falha ao banar {ip} via nft: {msg_nft}")
 
-    # Sobe para o Django em background
     threading.Thread(
         target=_notificar_django,
         args=(ip, hits, janela, ev, ab_cfg, cfg, session, session_lock),
@@ -99,11 +120,12 @@ def _executar_ban(ip, hits, janela, ev, ab_cfg, cfg, session, session_lock):
     ).start()
 
     with _ban_lock:
-        _ban_stats["total_bans"] += 1
-        _ban_stats["ultimo_ban"] = datetime.now().strftime("%H:%M:%S")
-        _ban_stats["ultimo_ip"]  = ip
+        _ban_stats["total_bans"]    += 1
+        _ban_stats["bans_sessao"]   += 1
+        _ban_stats["ultimo_ban"]     = datetime.now().strftime("%H:%M:%S")
+        _ban_stats["ultimo_ip"]      = ip
+        _ban_stats["ultimo_motivo"]  = motivo   # v2
 
-    # Agenda remoção automática se expires > 0
     if ab_cfg["expire_seg"] > 0:
         threading.Thread(
             target=_remover_ban_apos,
@@ -113,7 +135,6 @@ def _executar_ban(ip, hits, janela, ev, ab_cfg, cfg, session, session_lock):
 
 
 def _ban_nft(ip: str, ab_cfg: dict) -> tuple[bool, str]:
-    """Adiciona regra DROP na chain ms_emergency."""
     try:
         result = subprocess.run(
             ["nft", "add", "rule", "inet", "moonshield", "ms_emergency",
@@ -130,9 +151,7 @@ def _ban_nft(ip: str, ab_cfg: dict) -> tuple[bool, str]:
 
 
 def _remover_ban_nft(ip: str):
-    """Remove regra de autoban da chain ms_emergency."""
     try:
-        # Lista as regras, acha o handle da regra com esse IP e deleta
         result = subprocess.run(
             ["nft", "-a", "list", "chain", "inet", "moonshield", "ms_emergency"],
             capture_output=True, text=True, timeout=5,
@@ -153,7 +172,6 @@ def _remover_ban_nft(ip: str):
 
 
 def _remover_ban_apos(ip: str, segundos: int):
-    """Remove o ban após o tempo de expiração."""
     time.sleep(segundos)
     _remover_ban_nft(ip)
     with _ban_lock:
@@ -162,10 +180,12 @@ def _remover_ban_apos(ip: str, segundos: int):
         _hit_counter.pop(ip, None)
     logger.info(f"[autoban] Ban de {ip} expirado após {segundos}s")
 
+# ══════════════════════════════════════════════════════════════════════════════
+# DJANGO
+# ══════════════════════════════════════════════════════════════════════════════
 
 def _notificar_django(ip, hits, janela, ev, ab_cfg, cfg, session, session_lock):
-    """POST /firewall/api/autoban/ para registrar no painel."""
-    url = cfg["Moon_url"].rstrip("/") + AUTOBAN_PATH
+    url   = cfg["Moon_url"].rstrip("/") + AUTOBAN_PATH
     token = cfg.get("token", "")
     payload = {
         "ip":     ip,
@@ -194,6 +214,9 @@ def _notificar_django(ip, hits, janela, ev, ab_cfg, cfg, session, session_lock):
             logger.warning(f"[autoban] Tentativa {tentativa+1} falhou: {e}")
         time.sleep(2 ** tentativa)
 
+# ══════════════════════════════════════════════════════════════════════════════
+# UTILITÁRIOS
+# ══════════════════════════════════════════════════════════════════════════════
 
 def _detectar_motivo(ev: dict) -> str:
     porta = ev.get("dst_port")
@@ -208,7 +231,6 @@ def _detectar_motivo(ev: dict) -> str:
 
 
 def _ip_privado(ip: str) -> bool:
-    """Retorna True para IPs RFC1918 e loopback."""
     import ipaddress
     try:
         addr = ipaddress.ip_address(ip)

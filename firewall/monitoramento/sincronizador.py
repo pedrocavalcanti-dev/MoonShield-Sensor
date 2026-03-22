@@ -1,40 +1,58 @@
 """
-firewall/sincronizador.py
+firewall/monitoramento/sincronizador.py
 ──────────────────────────────────────────────────────────────────────
 Sincroniza regras do Django para nftables via poll.
 Poll em /firewall/api/pending-rules/ a cada 30s.
 Quando há pendentes: gera script nft → aplica → confirma no Django.
 
-O iface_map é relido do cfg a cada poll — o monitoramento.py já
-o atualiza automaticamente via _detectar_interfaces(cfg), então
-o analista nunca precisa editar o config manualmente.
+v2: corrige import typo (nucelo→nucleo), hash para evitar reaplicação
+    desnecessária, contagem de regras ativas após apply, stats ricos.
 ──────────────────────────────────────────────────────────────────────
 """
 
+import hashlib
 import os
 import subprocess
 import threading
 import time
 import logging
 
-from firewall.conversor import gerar_script_nft, validar_iface_map
+from firewall.nucleo.conversor import gerar_script_nft, validar_iface_map   # fix: nucelo → nucleo
 
 logger = logging.getLogger(__name__)
 
-POLL_INTERVAL = 30
-PENDING_PATH  = "/firewall/api/pending-rules/"
-CONFIRM_PATH  = "/firewall/api/confirm-rules/"
-TMP_NFT_FILE  = "/tmp/ms_rules_sync.nft"
+# ══════════════════════════════════════════════════════════════════════════════
+# CONSTANTES
+# ══════════════════════════════════════════════════════════════════════════════
+
+VERSAO_SINCRONIZADOR = "2.0"
+POLL_INTERVAL        = 30
+PENDING_PATH         = "/firewall/api/pending-rules/"
+CONFIRM_PATH         = "/firewall/api/confirm-rules/"
+TMP_NFT_FILE         = "/tmp/ms_rules_sync.nft"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ESTADO
+# ══════════════════════════════════════════════════════════════════════════════
 
 _sync_stats = {
-    "rodando":      False,
-    "ultimo_poll":  "—",
-    "ultimo_apply": "—",
-    "aplicacoes":   0,
-    "erros":        0,
+    "rodando":           False,
+    "ultimo_poll":       "—",
+    "ultimo_apply":      "—",
+    "aplicacoes":        0,
+    "erros":             0,
+    "regras_ativas":     0,
+    "ultima_versao":     "—",
+    "polls_sem_mudanca": 0,
 }
 _sync_lock = threading.Lock()
 
+# Hash das regras mais recentemente aplicadas — evita reaplicar o mesmo conjunto
+_hash_regras_aplicadas: str | None = None
+
+# ══════════════════════════════════════════════════════════════════════════════
+# INTERFACE PÚBLICA
+# ══════════════════════════════════════════════════════════════════════════════
 
 def _agora():
     from datetime import datetime
@@ -55,8 +73,9 @@ def iniciar_sincronizador(cfg: dict, parar: threading.Event,
                           session, session_lock) -> threading.Thread:
     with _sync_lock:
         _sync_stats.update({
-            "rodando": True, "ultimo_poll": "—",
-            "ultimo_apply": "—", "aplicacoes": 0, "erros": 0,
+            "rodando": True, "ultimo_poll": "—", "ultimo_apply": "—",
+            "aplicacoes": 0, "erros": 0, "regras_ativas": 0,
+            "ultima_versao": "—", "polls_sem_mudanca": 0,
         })
     t = threading.Thread(
         target=_loop_sincronizador,
@@ -71,6 +90,9 @@ def parar_sincronizador():
     with _sync_lock:
         _sync_stats["rodando"] = False
 
+# ══════════════════════════════════════════════════════════════════════════════
+# LOOP
+# ══════════════════════════════════════════════════════════════════════════════
 
 def _loop_sincronizador(cfg: dict, parar: threading.Event,
                         session, session_lock):
@@ -79,23 +101,21 @@ def _loop_sincronizador(cfg: dict, parar: threading.Event,
     token       = cfg.get("token", "")
     headers     = {"X-MS-TOKEN": token}
 
-    # Usa apenas o iface_map do config para validação — sem default fallback,
-    # pois o default (eth0/eth1/tun0) geraria avisos falsos em sistemas reais.
-    # O monitoramento.py atualiza cfg['iface_map'] no heartbeat inicial.
     iface_map_inicial = cfg.get("iface_map") or {}
     if iface_map_inicial:
         avisos = validar_iface_map(iface_map_inicial)
         for aviso in avisos:
             logger.warning(f"[sync] {aviso}")
 
-    logger.info(f"[sync] Iniciado — poll a cada {POLL_INTERVAL}s | iface_map: {iface_map_inicial or '(aguardando heartbeat)'}")
+    logger.info(
+        f"[sync] Iniciado v{VERSAO_SINCRONIZADOR} — poll a cada {POLL_INTERVAL}s "
+        f"| iface_map: {iface_map_inicial or '(aguardando heartbeat)'}"
+    )
 
     while not parar.is_set():
         try:
-            # Relê iface_map do cfg a cada iteração — reflete o que
-            # _detectar_interfaces(cfg) salvou no heartbeat do monitoramento
+            # Relê iface_map a cada iteração — reflete o que _detectar_interfaces salvou
             iface_map = cfg.get("iface_map", {"WAN": "eth0", "LAN": "eth1", "VPN": "tun0"})
-
             _poll_e_aplicar(pending_url, confirm_url, headers, iface_map,
                             session, session_lock, cfg)
         except Exception as e:
@@ -112,9 +132,14 @@ def _loop_sincronizador(cfg: dict, parar: threading.Event,
         _sync_stats["rodando"] = False
     logger.info("[sync] Encerrado")
 
+# ══════════════════════════════════════════════════════════════════════════════
+# POLL E APLICAR
+# ══════════════════════════════════════════════════════════════════════════════
 
 def _poll_e_aplicar(pending_url, confirm_url, headers, iface_map,
                     session, session_lock, cfg):
+    global _hash_regras_aplicadas
+
     with _sync_lock:
         _sync_stats["ultimo_poll"] = _agora()
 
@@ -142,6 +167,22 @@ def _poll_e_aplicar(pending_url, confirm_url, headers, iface_map,
     im_remoto = data.get("iface_map", {})
     iface_final = {**im_remoto, **iface_map}  # local tem prioridade
 
+    # v2: skip se as regras são as mesmas da aplicação anterior
+    hash_atual = hashlib.md5(
+        str(sorted(r.get("id", 0) for r in rules)).encode()
+    ).hexdigest()
+
+    if hash_atual == _hash_regras_aplicadas:
+        with _sync_lock:
+            _sync_stats["polls_sem_mudanca"] += 1
+        logger.debug("[sync] Regras sem mudança — skip")
+        _confirmar(
+            confirm_url, headers,
+            [r["id"] for r in rules if "id" in r],
+            True, "sem mudanca", session, session_lock,
+        )
+        return
+
     logger.info(f"[sync] {data.get('pendentes', 0)} pendente(s) — aplicando {len(rules)} regras")
 
     ok, msg = _aplicar_regras(rules, iface_final)
@@ -150,14 +191,17 @@ def _poll_e_aplicar(pending_url, confirm_url, headers, iface_map,
 
     with _sync_lock:
         if ok:
-            _sync_stats["aplicacoes"] += 1
-            _sync_stats["ultimo_apply"] = _agora()
+            _hash_regras_aplicadas = hash_atual
+            _sync_stats["aplicacoes"]   += 1
+            _sync_stats["ultimo_apply"]  = _agora()
+            # v2: conta regras ativas no nft após apply
+            _sync_stats["regras_ativas"] = _contar_regras_ativas()
+            _sync_stats["ultima_versao"] = _agora()
         else:
             _sync_stats["erros"] += 1
 
 
 def _aplicar_regras(rules: list, iface_map: dict) -> tuple[bool, str]:
-    # Gera script — lista vazia resulta num script que só faz flush da chain
     script = gerar_script_nft(rules, iface_map)
     try:
         with open(TMP_NFT_FILE, "w", encoding="utf-8") as f:
@@ -192,6 +236,19 @@ def _aplicar_regras(rules: list, iface_map: dict) -> tuple[bool, str]:
                 os.remove(TMP_NFT_FILE)
             except Exception:
                 pass
+
+
+def _contar_regras_ativas() -> int:
+    """Conta linhas de regra reais na chain ms_rules após apply."""
+    try:
+        result = subprocess.run(
+            ["nft", "list", "chain", "inet", "moonshield", "ms_rules"],
+            capture_output=True, text=True, timeout=5,
+        )
+        count = result.stdout.count(" drop") + result.stdout.count(" accept")
+        return count
+    except Exception:
+        return 0
 
 
 def _confirmar(confirm_url, headers, rule_ids, success, msg,

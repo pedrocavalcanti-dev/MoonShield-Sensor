@@ -1,8 +1,12 @@
-﻿# MOONSHIELD Sensor — dependências
-# Instalar com: pip install -r requirements.txt
+﻿# MoonShield Sensor — dependências
+# Instalar com: pip install -r requirements.txt --break-system-packages
 
-# HTTP requests para enviar eventos ao MOONSHIELD
+# HTTP requests para enviar eventos ao MoonShield
 requests>=2.28.0
 
 # Terminal colorido (menu TUI)
 colorama>=0.4.6
+
+# Agente HTTP local (Flask :8765) — aplica regras sem esperar poll de 30s
+flask>=3.0.0
+werkzeug>=3.0.0

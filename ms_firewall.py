@@ -33,10 +33,10 @@ from nucleo.interface    import (
     C_TITULO, C_WHITE, C_DIM, C_OK, C_ERRO, C_AVISO,
     C_MENU_TXT, C_NEON_DIM, C_BORDA, C_NORMAL,
 )
-from firewall.instalador   import obter_status, instalar_regras
-from firewall.interface    import tela_firewall
-import firewall.monitoramento as fw_mon
-import firewall.sincronizador as fw_sync
+from firewall.nucelo.instalador   import obter_status, instalar_regras
+from firewall.interface.interface    import tela_firewall
+import firewall.monitoramento.monitoramento as fw_mon
+import firewall.monitoramento.sincronizador as fw_sync
 
 # ══════════════════════════════════════════════════════════════════════════════
 # BOOT
@@ -287,19 +287,19 @@ def _tela_monitoramento(cfg: dict):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _tela_instalar(cfg: dict):
-    from firewall.interface import _tela_instalar as _fw_instalar
+    from firewall.interface.interface import _tela_instalar as _fw_instalar
     _fw_instalar(cfg)
 
 def _tela_status(cfg: dict):
-    from firewall.interface import _tela_status as _fw_status
+    from firewall.interface.interface import _tela_status as _fw_status
     _fw_status(cfg)
 
 def _tela_listar(cfg: dict):
-    from firewall.interface import _tela_listar as _fw_listar
+    from firewall.interface.interface import _tela_listar as _fw_listar
     _fw_listar(cfg)
 
 def _tela_remover(cfg: dict):
-    from firewall.interface import _tela_remover as _fw_remover
+    from firewall.interface.interface import _tela_remover as _fw_remover
     _fw_remover(cfg)
 
 def _tela_config_url(cfg: dict) -> dict:
