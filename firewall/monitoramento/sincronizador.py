@@ -193,6 +193,21 @@ def parar_sincronizador():
 # LOOP PRINCIPAL
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _protecoes_ativas(ips_protegidos) -> bool:
+    """Verifica se as regras de proteção ainda estão na chain nftables."""
+    if not ips_protegidos:
+        return True
+    try:
+        result = subprocess.run(
+            ["nft", "list", "chain", "inet", "moonshield", "ms_rules"],
+            capture_output=True, text=True, timeout=5,
+        )
+        chain = result.stdout
+        return all(f"ip saddr {ip} accept" in chain for ip in ips_protegidos)
+    except Exception:
+        return False
+
+
 def _aplicar_so_protecoes(ips_protegidos, iface_map):
     """
     Aplica apenas as regras de proteção automática na chain,
@@ -281,7 +296,12 @@ def _poll_e_aplicar(pending_url, confirm_url, headers, iface_map,
         return
 
     data = resp.json()
-    if not data.get("ok") or not data.get("tem_pendentes"):
+    if not data.get("ok"):
+        return
+
+    # Mesmo sem pendentes, garante que as proteções estão na chain
+    if not data.get("tem_pendentes"):
+        _aplicar_so_protecoes(ips_protegidos, iface_map)
         return
 
     rules       = data.get("rules", [])
