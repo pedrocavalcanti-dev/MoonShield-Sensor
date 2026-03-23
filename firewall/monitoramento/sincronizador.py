@@ -193,6 +193,21 @@ def parar_sincronizador():
 # LOOP PRINCIPAL
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _aplicar_so_protecoes(ips_protegidos, iface_map):
+    """
+    Aplica apenas as regras de proteção automática na chain,
+    sem depender de regras no banco. Garante que os IPs críticos
+    sempre têm acesso mesmo com a chain vazia.
+    """
+    if not ips_protegidos:
+        return
+    ok, msg = _aplicar_regras([], iface_map, ips_protegidos)
+    if ok:
+        logger.info(f"[sync] Proteções aplicadas ao iniciar: {', '.join(ips_protegidos)}")
+    else:
+        logger.warning(f"[sync] Falha ao aplicar proteções iniciais: {msg}")
+
+
 def _loop_sincronizador(cfg, parar, session, session_lock):
     pending_url = cfg["Moon_url"].rstrip("/") + PENDING_PATH
     confirm_url = cfg["Moon_url"].rstrip("/") + CONFIRM_PATH
@@ -212,6 +227,9 @@ def _loop_sincronizador(cfg, parar, session, session_lock):
         logger.warning(f"[sync] {aviso}")
 
     logger.info(f"[sync] v{VERSAO_SINCRONIZADOR} — poll a cada {POLL_INTERVAL}s | iface_map: {iface_map}")
+
+    # Aplica proteções imediatamente ao iniciar, mesmo sem regras no banco
+    _aplicar_so_protecoes(ips_protegidos, iface_map)
 
     while not parar.is_set():
         try:
