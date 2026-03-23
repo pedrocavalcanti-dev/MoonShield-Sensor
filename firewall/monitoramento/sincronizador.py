@@ -1,20 +1,15 @@
 """
-firewall/sincronizador.py  (roda no sensor Linux, não no Django)
+firewall/monitoramento/sincronizador.py  v5
 ──────────────────────────────────────────────────────────────────────
-v5: proteção automática de IPs críticos — sem hardcode.
+Proteção automática de IPs críticos — sem hardcode.
 
-  - IP do Django   → extraído da Moon_url (ex: http://192.168.0.105/...)
-  - IP do sensor   → detectado via UDP trick (qual IP o kernel usaria
-                     para sair à rede) — nunca hardcodado
-  - IP do gateway  → lido da tabela de roteamento do Linux
+Ao iniciar detecta automaticamente:
+  - IP do Django   → extraído da Moon_url
+  - IP do sensor   → UDP trick (kernel resolve qual IP usa pra sair)
+  - IP do gateway  → lido de `ip route show default`
 
-  Ao aplicar regras, injeta ANTES de tudo:
-    insert rule inet moonshield ms_rules ip saddr <IP_DJANGO>  accept
-    insert rule inet moonshield ms_rules ip saddr <IP_SENSOR>  accept
-    insert rule inet moonshield ms_rules ip saddr <IP_GATEWAY> accept
-
-  Isso garante que mesmo que alguém crie DENY any, esses IPs
-  críticos sempre conseguem se comunicar.
+Injeta no topo da chain antes de qualquer regra do usuário:
+  insert rule inet moonshield ms_rules ip saddr <IP> accept
 ──────────────────────────────────────────────────────────────────────
 """
 
@@ -27,7 +22,8 @@ import threading
 import time
 import logging
 
-from .conversor import gerar_script_nft, validar_iface_map
+from firewall.nucleo.conversor import gerar_script_nft, validar_iface_map
+from nucleo.utilitarios import agora
 
 logger = logging.getLogger(__name__)
 
@@ -49,15 +45,14 @@ _sync_stats = {
     "ips_protegidos":    [],
 }
 _sync_lock = threading.Lock()
-_hash_regras_aplicadas: str | None = None
+_hash_regras_aplicadas = None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DETECÇÃO AUTOMÁTICA DE IPs CRÍTICOS
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _ip_do_django(moon_url: str) -> str | None:
-    """Extrai o IP do servidor Django da Moon_url configurada."""
+def _ip_do_django(moon_url):
     try:
         m = re.search(r'https?://(\d+\.\d+\.\d+\.\d+)', moon_url)
         return m.group(1) if m else None
@@ -65,13 +60,8 @@ def _ip_do_django(moon_url: str) -> str | None:
         return None
 
 
-def _ip_do_sensor() -> str | None:
-    """
-    Detecta o IP local do sensor via UDP trick.
-    Pergunta ao kernel qual IP usaria para sair à rede — não manda
-    nenhum pacote, só consulta a tabela de roteamento.
-    Funciona independente do nome da interface ou configuração.
-    """
+def _ip_do_sensor():
+    """UDP trick — pergunta ao kernel qual IP usaria para sair à rede."""
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(('8.8.8.8', 80))
@@ -84,98 +74,66 @@ def _ip_do_sensor() -> str | None:
     return None
 
 
-def _ip_do_gateway() -> str | None:
-    """
-    Lê o gateway padrão da tabela de roteamento do Linux.
-    Usa `ip route` para não depender de config manual.
-    """
+def _ip_do_gateway():
+    """Lê o gateway padrão de `ip route show default`."""
     try:
         result = subprocess.run(
             ['ip', 'route', 'show', 'default'],
             capture_output=True, text=True, timeout=3,
         )
-        # Formato: "default via 192.168.0.1 dev eth0 ..."
         m = re.search(r'default via (\d+\.\d+\.\d+\.\d+)', result.stdout)
         return m.group(1) if m else None
     except Exception:
         return None
 
 
-def _coletar_ips_protegidos(moon_url: str) -> list[str]:
-    """
-    Coleta todos os IPs que devem ser protegidos (nunca bloqueados).
-    Retorna lista de IPs únicos detectados automaticamente.
-    """
+def _coletar_ips_protegidos(moon_url):
+    """Detecta todos os IPs críticos automaticamente — sem hardcode."""
     ips = []
 
-    ip_django = _ip_do_django(moon_url)
-    if ip_django:
-        ips.append(ip_django)
-        logger.info(f"[sync] IP Django detectado: {ip_django}")
+    ip = _ip_do_django(moon_url)
+    if ip:
+        ips.append(ip)
+        logger.info(f"[sync] IP Django: {ip}")
     else:
-        logger.warning("[sync] Não foi possível extrair IP do Django da Moon_url")
+        logger.warning("[sync] Não foi possível extrair IP do Django")
 
-    ip_sensor = _ip_do_sensor()
-    if ip_sensor:
-        # Evita duplicata se Django e sensor rodarem na mesma máquina
-        if ip_sensor not in ips:
-            ips.append(ip_sensor)
-        logger.info(f"[sync] IP Sensor detectado: {ip_sensor}")
+    ip = _ip_do_sensor()
+    if ip and ip not in ips:
+        ips.append(ip)
+        logger.info(f"[sync] IP Sensor: {ip}")
     else:
         logger.warning("[sync] Não foi possível detectar IP do sensor")
 
-    ip_gateway = _ip_do_gateway()
-    if ip_gateway:
-        if ip_gateway not in ips:
-            ips.append(ip_gateway)
-        logger.info(f"[sync] IP Gateway detectado: {ip_gateway}")
+    ip = _ip_do_gateway()
+    if ip and ip not in ips:
+        ips.append(ip)
+        logger.info(f"[sync] IP Gateway: {ip}")
     else:
-        logger.warning("[sync] Não foi possível detectar gateway padrão")
+        logger.warning("[sync] Não foi possível detectar gateway")
 
     return ips
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# GERAÇÃO DO SCRIPT COM PROTEÇÃO
+# SCRIPT COM PROTEÇÃO
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _linhas_protecao(ips_protegidos: list[str]) -> list[str]:
-    """
-    Gera as linhas nft que garantem acesso dos IPs críticos.
-    Usa 'insert' para que fiquem sempre no topo da chain,
-    acima de qualquer regra DENY criada pelo usuário.
-    """
-    if not ips_protegidos:
-        return []
-
-    linhas = [
-        "# ── MOONSHIELD: IPs críticos sempre permitidos (auto-detectados) ──",
-    ]
-    for ip in ips_protegidos:
-        linhas.append(
-            f"insert rule inet moonshield ms_rules "
-            f"ip saddr {ip} accept  "
-            f"# protegido automaticamente"
-        )
-    linhas.append("")
-    return linhas
-
-
-def _script_com_protecao(rules: list, iface_map: dict,
-                          ips_protegidos: list[str]) -> str:
-    """
-    Gera o script nft com as regras de proteção inseridas
-    logo após o flush chain, antes de qualquer outra regra.
-    """
+def _script_com_protecao(rules, iface_map, ips_protegidos):
     script = gerar_script_nft(rules, iface_map)
 
     if not ips_protegidos:
         return script
 
-    linhas_prot = _linhas_protecao(ips_protegidos)
-    linhas      = script.splitlines()
-    resultado   = []
+    linhas_prot = ["# ── IPs críticos sempre permitidos (auto-detectados) ──"]
+    for ip in ips_protegidos:
+        linhas_prot.append(
+            f"insert rule inet moonshield ms_rules ip saddr {ip} accept"
+        )
+    linhas_prot.append("")
 
+    linhas    = script.splitlines()
+    resultado = []
     for linha in linhas:
         resultado.append(linha)
         if linha.strip().startswith("flush chain inet moonshield ms_rules"):
@@ -189,12 +147,7 @@ def _script_com_protecao(rules: list, iface_map: dict,
 # INTERFACE PÚBLICA
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _agora():
-    from datetime import datetime
-    return datetime.now().strftime("%H:%M:%S")
-
-
-def _hash_conteudo_regras(rules: list) -> str:
+def _hash_regras(rules):
     chave = sorted(
         f"{r.get('id')}|{r.get('action')}|{r.get('src')}|{r.get('dst')}|"
         f"{r.get('port')}|{r.get('priority')}|{r.get('enabled')}|"
@@ -204,18 +157,17 @@ def _hash_conteudo_regras(rules: list) -> str:
     return hashlib.md5(str(chave).encode()).hexdigest()
 
 
-def obter_stats() -> dict:
+def obter_stats():
     with _sync_lock:
         return dict(_sync_stats)
 
 
-def esta_rodando() -> bool:
+def esta_rodando():
     with _sync_lock:
         return _sync_stats["rodando"]
 
 
-def iniciar_sincronizador(cfg: dict, parar: threading.Event,
-                          session, session_lock) -> threading.Thread:
+def iniciar_sincronizador(cfg, parar, session, session_lock):
     with _sync_lock:
         _sync_stats.update({
             "rodando": True, "ultimo_poll": "—", "ultimo_apply": "—",
@@ -241,16 +193,12 @@ def parar_sincronizador():
 # LOOP PRINCIPAL
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _loop_sincronizador(cfg: dict, parar: threading.Event,
-                        session, session_lock):
+def _loop_sincronizador(cfg, parar, session, session_lock):
     pending_url = cfg["Moon_url"].rstrip("/") + PENDING_PATH
     confirm_url = cfg["Moon_url"].rstrip("/") + CONFIRM_PATH
-    token       = cfg.get("token", "")
-    headers     = {"X-MS-TOKEN": token}
+    headers     = {"X-MS-TOKEN": cfg.get("token", "")}
 
-    # Detecta todos os IPs críticos automaticamente ao iniciar
     ips_protegidos = _coletar_ips_protegidos(cfg.get("Moon_url", ""))
-
     with _sync_lock:
         _sync_stats["ips_protegidos"] = ips_protegidos
 
@@ -259,19 +207,14 @@ def _loop_sincronizador(cfg: dict, parar: threading.Event,
     else:
         logger.warning("[sync] Nenhum IP crítico detectado — proteção desativada")
 
-    # Valida iface_map se veio no config
-    iface_map_inicial = cfg.get("iface_map") or {}
-    if iface_map_inicial:
-        for aviso in validar_iface_map(iface_map_inicial):
-            logger.warning(f"[sync] {aviso}")
+    iface_map = cfg.get("iface_map", {"WAN": "eth0", "LAN": "eth1", "VPN": "tun0"})
+    for aviso in validar_iface_map(iface_map):
+        logger.warning(f"[sync] {aviso}")
 
-    logger.info(
-        f"[sync] Iniciado v{VERSAO_SINCRONIZADOR} — poll a cada {POLL_INTERVAL}s"
-    )
+    logger.info(f"[sync] v{VERSAO_SINCRONIZADOR} — poll a cada {POLL_INTERVAL}s | iface_map: {iface_map}")
 
     while not parar.is_set():
         try:
-            iface_map = cfg.get("iface_map", {"WAN": "eth0", "LAN": "eth1", "VPN": "tun0"})
             _poll_e_aplicar(
                 pending_url, confirm_url, headers,
                 iface_map, session, session_lock,
@@ -301,7 +244,7 @@ def _poll_e_aplicar(pending_url, confirm_url, headers, iface_map,
     global _hash_regras_aplicadas
 
     with _sync_lock:
-        _sync_stats["ultimo_poll"] = _agora()
+        _sync_stats["ultimo_poll"] = agora()
 
     try:
         with session_lock:
@@ -324,27 +267,20 @@ def _poll_e_aplicar(pending_url, confirm_url, headers, iface_map,
         return
 
     rules       = data.get("rules", [])
-    im_remoto   = data.get("iface_map", {})
-    # iface_map local (config.json) tem prioridade sobre o remoto
-    iface_final = {**im_remoto, **iface_map}
+    iface_final = {**data.get("iface_map", {}), **iface_map}  # local tem prioridade
 
-    hash_atual = _hash_conteudo_regras(rules)
-
+    hash_atual = _hash_regras(rules)
     if hash_atual == _hash_regras_aplicadas:
         with _sync_lock:
             _sync_stats["polls_sem_mudanca"] += 1
-        logger.debug("[sync] Regras sem mudança — skip")
-        _confirmar(
-            confirm_url, headers,
-            [r["id"] for r in rules if "id" in r],
-            True, "sem mudanca", session, session_lock,
-        )
+        logger.debug("[sync] Sem mudança — skip")
+        _confirmar(confirm_url, headers, [r["id"] for r in rules if "id" in r],
+                   True, "sem mudanca", session, session_lock)
         return
 
     logger.info(
         f"[sync] {data.get('pendentes', 0)} pendente(s) — "
-        f"aplicando {len(rules)} regras | "
-        f"protegendo: {', '.join(ips_protegidos) or '—'}"
+        f"{len(rules)} regras | protegendo: {', '.join(ips_protegidos) or '—'}"
     )
 
     ok, msg  = _aplicar_regras(rules, iface_final, ips_protegidos)
@@ -355,16 +291,14 @@ def _poll_e_aplicar(pending_url, confirm_url, headers, iface_map,
         if ok:
             _hash_regras_aplicadas       = hash_atual
             _sync_stats["aplicacoes"]   += 1
-            _sync_stats["ultimo_apply"]  = _agora()
+            _sync_stats["ultimo_apply"]  = agora()
             _sync_stats["regras_ativas"] = _contar_regras_ativas()
-            _sync_stats["ultima_versao"] = _agora()
+            _sync_stats["ultima_versao"] = agora()
         else:
             _sync_stats["erros"] += 1
 
 
-def _aplicar_regras(rules: list, iface_map: dict,
-                    ips_protegidos: list[str]) -> tuple[bool, str]:
-    """Gera script nft com proteção e aplica via nft -f."""
+def _aplicar_regras(rules, iface_map, ips_protegidos):
     script = _script_com_protecao(rules, iface_map, ips_protegidos)
     try:
         with open(TMP_NFT_FILE, "w", encoding="utf-8") as f:
@@ -377,8 +311,7 @@ def _aplicar_regras(rules: list, iface_map: dict,
 
         if result.returncode != 0:
             err = (result.stderr or result.stdout or "erro desconhecido").strip()
-            logger.error(f"[sync] nft -f falhou: {err}")
-            logger.error(f"[sync] Script:\n{script}")
+            logger.error(f"[sync] nft -f falhou: {err}\nScript:\n{script}")
             return False, f"nft error: {err[:200]}"
 
         prot = f" | protegidos: {', '.join(ips_protegidos)}" if ips_protegidos else ""
@@ -398,7 +331,7 @@ def _aplicar_regras(rules: list, iface_map: dict,
             pass
 
 
-def _contar_regras_ativas() -> int:
+def _contar_regras_ativas():
     try:
         result = subprocess.run(
             ["nft", "list", "chain", "inet", "moonshield", "ms_rules"],
@@ -409,15 +342,15 @@ def _contar_regras_ativas() -> int:
         return 0
 
 
-def _confirmar(confirm_url, headers, rule_ids, success, msg,
-               session, session_lock):
+def _confirmar(confirm_url, headers, rule_ids, success, msg, session, session_lock):
     try:
-        payload = {"rule_ids": rule_ids, "success": success, "msg": msg}
         with session_lock:
-            resp = session.post(confirm_url, json=payload, headers=headers, timeout=10)
-        if resp.ok:
-            logger.debug(f"[sync] Confirmação: {success} | {msg}")
-        else:
+            resp = session.post(
+                confirm_url,
+                json={"rule_ids": rule_ids, "success": success, "msg": msg},
+                headers=headers, timeout=10,
+            )
+        if not resp.ok:
             logger.warning(f"[sync] Falha ao confirmar: HTTP {resp.status_code}")
     except Exception as e:
         logger.warning(f"[sync] Erro ao confirmar: {e}")
@@ -425,8 +358,7 @@ def _confirmar(confirm_url, headers, rule_ids, success, msg,
 
 def _renovar_token(cfg, session, session_lock):
     try:
-        base      = cfg["Moon_url"].rstrip("/")
-        login_url = base + "/auth/login/"
+        login_url = cfg["Moon_url"].rstrip("/") + "/auth/login/"
         with session_lock:
             r    = session.get(login_url, timeout=5)
             csrf = session.cookies.get("csrftoken", "")
