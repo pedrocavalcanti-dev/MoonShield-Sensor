@@ -36,21 +36,26 @@ def regra_para_nft_inline(regra: dict, iface_map: dict | None = None) -> str | N
     if dst and dst != "any":
         partes.append(f"ip daddr {dst}")
 
-    # 4. Protocolo
+    # 4 e 5. Protocolo e Porta
     proto = (regra.get("proto") or "any").lower()
+    port = str(regra.get("port") or "any").strip()
+
     if proto == "icmp":
         partes.append("ip protocol icmp")
-    elif proto not in ("any", ""):
-        partes.append(proto)
-
-    # 5. Porta (só TCP/UDP)
-    port = str(regra.get("port") or "any").strip()
-    if port and port != "any" and proto in ("tcp", "udp"):
-        if "-" in port:
-            a, b = port.split("-", 1)
-            partes.append(f"dport {a.strip()}-{b.strip()}")
+    elif proto in ("tcp", "udp"):
+        if port and port != "any":
+            # Tem protocolo e tem porta específica (ex: tcp dport 80)
+            if "-" in port:
+                a, b = port.split("-", 1)
+                partes.append(f"{proto} dport {a.strip()}-{b.strip()}")
+            else:
+                partes.append(f"{proto} dport {port}")
         else:
-            partes.append(f"dport {port}")
+            # Tem protocolo TCP/UDP, mas a porta é ANY (todas as portas)
+            partes.append(f"meta l4proto {proto}")
+    elif proto not in ("any", ""):
+        # Fallback para outros protocolos sem porta
+        partes.append(f"ip protocol {proto}")
 
     # 6. Ação
     if regra.get("action") == "allow":
