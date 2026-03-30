@@ -493,10 +493,10 @@ def configurar_roteamento(interfaces: list[dict]):
 
 
 def _limpar_nat_anterior():
-    """Remove chains NAT/FORWARD do moonshield para evitar duplicação de regras."""
+    """Remove tabelas moonshield (ip e inet) para evitar duplicação de regras."""
     print_info("Limpando regras NAT anteriores...")
-    rodar("nft delete chain inet moonshield ms_nat_post 2>/dev/null", silencioso=True)
-    rodar("nft delete chain inet moonshield ms_forward_rt 2>/dev/null", silencioso=True)
+    # Tenta remover nas duas famílias (ip e inet) para garantir limpeza total
+    rodar("nft delete table ip moonshield 2>/dev/null", silencioso=True)
     rodar("nft delete table inet moonshield 2>/dev/null", silencioso=True)
     print_ok("Regras NAT anteriores removidas")
 
@@ -516,12 +516,17 @@ def _aplicar_nat(wan: str, lans: list[str]):
         print_erro("Falha ao ativar ip_forward")
         erros += 1
 
-    # 3. Cria tabela e chains NAT do zero
-    _garantir_tabela_nat()
+    # 3. Cria tabela e chains NAT do zero — verifica cada etapa
+    ok_nat = _garantir_tabela_nat()
+    if not ok_nat:
+        print_erro("Falha ao criar tabela/chains nftables. Abortando NAT.")
+        aguardar_enter()
+        return
 
     # 4. MASQUERADE na WAN
+    # Família "ip" (IPv4) — hook nat só funciona com "ip" em kernels sem suporte inet nat
     ok2, _, err2 = rodar(
-        f'nft add rule inet moonshield ms_nat_post oifname "{wan}" masquerade'
+        f'nft add rule ip moonshield ms_nat_post oifname "{wan}" masquerade'
     )
     if ok2:
         print_ok(f"MASQUERADE ativado em {wan}")
@@ -531,15 +536,17 @@ def _aplicar_nat(wan: str, lans: list[str]):
 
     # 5. FORWARD para cada LAN
     for lan in lans:
-        rodar(
-            f'nft add rule inet moonshield ms_forward_rt iifname "{lan}" oifname "{wan}" accept',
-            silencioso=True,
+        ok_fwd1, _, err_fwd1 = rodar(
+            f'nft add rule ip moonshield ms_forward_rt iifname "{lan}" oifname "{wan}" accept'
         )
-        rodar(
-            f'nft add rule inet moonshield ms_forward_rt iifname "{wan}" oifname "{lan}" ct state established,related accept',
-            silencioso=True,
+        ok_fwd2, _, err_fwd2 = rodar(
+            f'nft add rule ip moonshield ms_forward_rt iifname "{wan}" oifname "{lan}" ct state established,related accept'
         )
-        print_ok(f"FORWARD configurado: {lan} <-> {wan}")
+        if ok_fwd1 and ok_fwd2:
+            print_ok(f"FORWARD configurado: {lan} <-> {wan}")
+        else:
+            print_erro(f"Falha FORWARD {lan}: {(err_fwd1 or err_fwd2)[:80]}")
+            erros += 1
 
     if erros == 0:
         print()
@@ -551,15 +558,28 @@ def _aplicar_nat(wan: str, lans: list[str]):
         print_erro(f"{erros} erro(s) encontrado(s).")
 
 
-def _garantir_tabela_nat():
-    """Cria chains de NAT no nftables (tabela limpa, sem duplicatas)."""
-    cmds = [
-        "nft add table inet moonshield",
-        "nft add chain inet moonshield ms_nat_post { type nat hook postrouting priority 100 ; }",
-        "nft add chain inet moonshield ms_forward_rt { type filter hook forward priority 0 ; policy accept ; }",
+def _garantir_tabela_nat() -> bool:
+    """
+    Cria tabela e chains nftables usando família 'ip' (IPv4).
+    O hook 'nat' NÃO é suportado pela família 'inet' em kernels mais antigos —
+    usar 'ip' garante compatibilidade.
+    Retorna True se tudo foi criado com sucesso, False caso contrário.
+    """
+    passos = [
+        ("tabela ip moonshield",
+         "nft add table ip moonshield"),
+        ("chain ms_nat_post (NAT postrouting)",
+         "nft add chain ip moonshield ms_nat_post { type nat hook postrouting priority 100 ; }"),
+        ("chain ms_forward_rt (filter forward)",
+         "nft add chain ip moonshield ms_forward_rt { type filter hook forward priority 0 ; policy accept ; }"),
     ]
-    for cmd in cmds:
-        rodar(cmd, silencioso=True)
+    for descricao, cmd in passos:
+        ok, _, err = rodar(cmd, silencioso=False)
+        if not ok:
+            print_erro(f"Erro ao criar {descricao}: {err[:80]}")
+            return False
+        print_ok(f"Criado: {descricao}")
+    return True
 
 
 def _persistir_sysctl(chave: str, valor: str):
@@ -670,7 +690,7 @@ def ver_status():
     # nftables NAT
     linha_texto("  -- nftables NAT ---------------------------------------", C_NEON)
     ok3, nat_out, _ = rodar(
-        "nft list chain inet moonshield ms_nat_post 2>/dev/null", silencioso=True
+        "nft list chain ip moonshield ms_nat_post 2>/dev/null", silencioso=True
     )
     if ok3 and nat_out:
         for l in nat_out.splitlines():
