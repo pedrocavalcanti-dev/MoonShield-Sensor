@@ -524,9 +524,9 @@ def _aplicar_nat(wan: str, lans: list[str]):
         return
 
     # 4. MASQUERADE na WAN
-    # Família "ip" (IPv4) — hook nat só funciona com "ip" em kernels sem suporte inet nat
     ok2, _, err2 = rodar(
-        f'nft add rule ip moonshield ms_nat_post oifname "{wan}" masquerade'
+        ["nft", "add", "rule", "ip", "moonshield", "ms_nat_post",
+         "oifname", wan, "masquerade"]
     )
     if ok2:
         print_ok(f"MASQUERADE ativado em {wan}")
@@ -537,10 +537,13 @@ def _aplicar_nat(wan: str, lans: list[str]):
     # 5. FORWARD para cada LAN
     for lan in lans:
         ok_fwd1, _, err_fwd1 = rodar(
-            f'nft add rule ip moonshield ms_forward_rt iifname "{lan}" oifname "{wan}" accept'
+            ["nft", "add", "rule", "ip", "moonshield", "ms_forward_rt",
+             "iifname", lan, "oifname", wan, "accept"]
         )
         ok_fwd2, _, err_fwd2 = rodar(
-            f'nft add rule ip moonshield ms_forward_rt iifname "{wan}" oifname "{lan}" ct state established,related accept'
+            ["nft", "add", "rule", "ip", "moonshield", "ms_forward_rt",
+             "iifname", wan, "oifname", lan,
+             "ct", "state", "established,related", "accept"]
         )
         if ok_fwd1 and ok_fwd2:
             print_ok(f"FORWARD configurado: {lan} <-> {wan}")
@@ -565,13 +568,17 @@ def _garantir_tabela_nat() -> bool:
     usar 'ip' garante compatibilidade.
     Retorna True se tudo foi criado com sucesso, False caso contrário.
     """
+    # Usa lista de argumentos (sem shell=True) para evitar que o sh
+    # interprete as chaves { } como sintaxe própria do shell.
     passos = [
         ("tabela ip moonshield",
-         "nft add table ip moonshield"),
+         ["nft", "add", "table", "ip", "moonshield"]),
         ("chain ms_nat_post (NAT postrouting)",
-         "nft add chain ip moonshield ms_nat_post { type nat hook postrouting priority 100 ; }"),
+         ["nft", "add", "chain", "ip", "moonshield", "ms_nat_post",
+          "{ type nat hook postrouting priority 100 ; }"]),
         ("chain ms_forward_rt (filter forward)",
-         "nft add chain ip moonshield ms_forward_rt { type filter hook forward priority 0 ; policy accept ; }"),
+         ["nft", "add", "chain", "ip", "moonshield", "ms_forward_rt",
+          "{ type filter hook forward priority 0 ; policy accept ; }"]),
     ]
     for descricao, cmd in passos:
         ok, _, err = rodar(cmd, silencioso=False)
