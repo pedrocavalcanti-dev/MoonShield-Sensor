@@ -108,6 +108,10 @@ def print_erro(msg):
     print(C_ERRO + f"  [!!] {msg}" + C_RESET)
 
 
+def print_aviso(msg):
+    print(C_AVISO + f"  [!] {msg}" + C_RESET)
+
+
 def print_info(msg):
     print(C_DIM + f"  [ ] {msg}" + C_RESET)
 
@@ -119,13 +123,46 @@ def rodar(cmd, silencioso=False):
             cmd, shell=isinstance(cmd, str),
             capture_output=True, text=True, timeout=15,
         )
-        if not silencioso and r.returncode != 0 and r.stderr:
-            pass
         return r.returncode == 0, r.stdout.strip(), r.stderr.strip()
     except subprocess.TimeoutExpired:
         return False, "", "Timeout"
     except Exception as e:
         return False, "", str(e)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# LIMPEZA DE CONFIGURAÇÃO DE INTERFACE
+# ══════════════════════════════════════════════════════════════════════════════
+
+def limpar_interface(nome: str):
+    """
+    Remove TODOS os IPs, rotas e processos DHCP associados à interface.
+    Deve ser chamado antes de aplicar qualquer nova configuração.
+    """
+    print_info(f"Limpando configuracao atual de {nome}...")
+
+    # Mata processos dhclient / udhcpc em execução para esta interface
+    rodar(f"pkill -f 'dhclient.*{nome}'", silencioso=True)
+    rodar(f"pkill -f 'udhcpc.*{nome}'", silencioso=True)
+    rodar(f"dhclient -r {nome}", silencioso=True)
+
+    # Remove todas as rotas que passam por esta interface
+    ok, rotas, _ = rodar(f"ip route show dev {nome}", silencioso=True)
+    if ok and rotas:
+        for rota in rotas.splitlines():
+            rota = rota.strip()
+            if rota:
+                rodar(f"ip route del {rota.split()[0]} dev {nome}", silencioso=True)
+
+    # Remove rota default se tiver esta interface
+    ok2, default_r, _ = rodar("ip route show default", silencioso=True)
+    if ok2 and nome in default_r:
+        rodar("ip route del default", silencioso=True)
+
+    # Remove todos os IPs da interface (flush)
+    rodar(f"ip addr flush dev {nome}", silencioso=True)
+
+    print_ok(f"Interface {nome} limpa")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -149,11 +186,7 @@ def listar_interfaces() -> list[dict]:
             if nome == "lo" or nome in vistas:
                 continue
 
-            # Filtra só IPv4
             if partes[2] != "inet":
-                # Verifica se a interface existe mas sem IP
-                if nome not in [i["nome"] for i in interfaces]:
-                    pass
                 continue
 
             cidr  = partes[3]
@@ -161,7 +194,6 @@ def listar_interfaces() -> list[dict]:
             mask  = cidr.split("/")[1] if "/" in cidr else "24"
             vistas.add(nome)
 
-            # Estado
             ok2, s2, _ = rodar(f"ip link show {nome}", silencioso=True)
             estado = "UP" if "UP" in s2 and "LOWER_UP" in s2 else "DOWN"
             mac_m  = re.search(r"link/ether ([0-9a-f:]+)", s2)
@@ -241,7 +273,6 @@ def configurar_interface(interfaces: list[dict]):
     if not escolha:
         return
 
-    # Aceita número ou nome
     iface = None
     if escolha.isdigit():
         idx = int(escolha) - 1
@@ -300,17 +331,17 @@ def _configurar_estatico(iface: dict):
         aguardar_enter()
         return
 
-    # Valida IP
     if not re.match(r"^\d+\.\d+\.\d+\.\d+$", ip):
         print_erro("IP invalido.")
         aguardar_enter()
         return
 
     print()
-    print_info(f"Configurando {iface['nome']}...")
 
-    # Remove IPs antigos da interface
-    rodar(f"ip addr flush dev {iface['nome']}", silencioso=True)
+    # ── LIMPA a configuração atual da interface antes de aplicar ──
+    limpar_interface(iface["nome"])
+
+    print_info(f"Aplicando nova configuracao em {iface['nome']}...")
 
     # Ativa a interface
     ok, _, err = rodar(f"ip link set {iface['nome']} up")
@@ -335,7 +366,6 @@ def _configurar_estatico(iface: dict):
         if ok2:
             print_ok(f"Gateway {gateway} configurado")
         else:
-            print_aviso = lambda m: print(C_AVISO + f"  [!!] {m}" + C_RESET)
             print_aviso(f"Gateway nao aplicado: {err2}")
 
     aguardar_enter()
@@ -348,21 +378,22 @@ def _configurar_dhcp(iface: dict):
     print_info(f"Solicitando IP via DHCP em {iface['nome']}...")
     print()
 
-    # Ativa a interface primeiro
+    # ── LIMPA a configuração atual da interface antes de pedir DHCP ──
+    limpar_interface(iface["nome"])
+
+    # Ativa a interface
     rodar(f"ip link set {iface['nome']} up", silencioso=True)
 
     # Tenta dhclient
     ok, _, _ = rodar("which dhclient", silencioso=True)
     if ok:
         print_info("Usando dhclient...")
-        rodar(f"dhclient -r {iface['nome']}", silencioso=True)
         ok2, saida, err = rodar(f"dhclient {iface['nome']}", silencioso=True)
         if ok2:
             print_ok(f"DHCP aplicado em {iface['nome']}")
         else:
             print_erro(f"dhclient falhou: {err[:80]}")
     else:
-        # Tenta udhcpc
         ok3, _, _ = rodar("which udhcpc", silencioso=True)
         if ok3:
             print_info("Usando udhcpc...")
@@ -387,6 +418,8 @@ def _ativar_interface(nome: str):
 
 
 def _desativar_interface(nome: str):
+    # ── LIMPA antes de desativar ──
+    limpar_interface(nome)
     ok, _, err = rodar(f"ip link set {nome} down")
     if ok:
         print_ok(f"Interface {nome} desativada")
@@ -424,7 +457,6 @@ def configurar_roteamento(interfaces: list[dict]):
         aguardar_enter()
         return
 
-    # LAN: se vazio, usa todas exceto WAN
     if lan_input.strip():
         iface_lan = _resolver_interface(lan_input, interfaces)
         if not iface_lan:
@@ -443,9 +475,10 @@ def configurar_roteamento(interfaces: list[dict]):
         linha_texto(f"  LAN (interna) : {lan}", C_WHITE)
     linha_vazia()
     linha_texto("  Isso vai:", C_DIM)
-    linha_texto("  1. Ativar ip_forward no kernel", C_DIM)
-    linha_texto("  2. Adicionar regras nftables de MASQUERADE", C_DIM)
-    linha_texto("  3. Adicionar regras de FORWARD entre WAN e LAN", C_DIM)
+    linha_texto("  1. Limpar regras NAT/FORWARD anteriores", C_DIM)
+    linha_texto("  2. Ativar ip_forward no kernel", C_DIM)
+    linha_texto("  3. Adicionar regras nftables de MASQUERADE", C_DIM)
+    linha_texto("  4. Adicionar regras de FORWARD entre WAN e LAN", C_DIM)
     linha_vazia()
 
     confirma = input_campo("Confirmar? (s/n)", "s")
@@ -459,28 +492,34 @@ def configurar_roteamento(interfaces: list[dict]):
     aguardar_enter()
 
 
+def _limpar_nat_anterior():
+    """Remove chains NAT/FORWARD do moonshield para evitar duplicação de regras."""
+    print_info("Limpando regras NAT anteriores...")
+    rodar("nft delete chain inet moonshield ms_nat_post 2>/dev/null", silencioso=True)
+    rodar("nft delete chain inet moonshield ms_forward_rt 2>/dev/null", silencioso=True)
+    rodar("nft delete table inet moonshield 2>/dev/null", silencioso=True)
+    print_ok("Regras NAT anteriores removidas")
+
+
 def _aplicar_nat(wan: str, lans: list[str]):
     erros = 0
 
-    # 1. ip_forward
+    # 1. Limpa regras NAT antigas para evitar duplicação
+    _limpar_nat_anterior()
+
+    # 2. ip_forward
     ok, _, _ = rodar("sysctl -w net.ipv4.ip_forward=1")
     if ok:
         print_ok("ip_forward ativado")
-        # Persiste
         _persistir_sysctl("net.ipv4.ip_forward", "1")
     else:
         print_erro("Falha ao ativar ip_forward")
         erros += 1
 
-    # 2. Garante tabela nat no nftables
+    # 3. Cria tabela e chains NAT do zero
     _garantir_tabela_nat()
 
-    # 3. MASQUERADE na WAN
-    # Remove regra antiga se existir
-    rodar(
-        f'nft delete rule inet moonshield ms_nat_post oifname "{wan}" masquerade 2>/dev/null',
-        silencioso=True,
-    )
+    # 4. MASQUERADE na WAN
     ok2, _, err2 = rodar(
         f'nft add rule inet moonshield ms_nat_post oifname "{wan}" masquerade'
     )
@@ -490,14 +529,12 @@ def _aplicar_nat(wan: str, lans: list[str]):
         print_erro(f"Falha MASQUERADE: {err2[:80]}")
         erros += 1
 
-    # 4. FORWARD para cada LAN
+    # 5. FORWARD para cada LAN
     for lan in lans:
-        # LAN → WAN
         rodar(
             f'nft add rule inet moonshield ms_forward_rt iifname "{lan}" oifname "{wan}" accept',
             silencioso=True,
         )
-        # WAN → LAN (tráfego estabelecido)
         rodar(
             f'nft add rule inet moonshield ms_forward_rt iifname "{wan}" oifname "{lan}" ct state established,related accept',
             silencioso=True,
@@ -515,7 +552,7 @@ def _aplicar_nat(wan: str, lans: list[str]):
 
 
 def _garantir_tabela_nat():
-    """Cria chains de NAT no nftables se nao existirem."""
+    """Cria chains de NAT no nftables (tabela limpa, sem duplicatas)."""
     cmds = [
         "nft add table inet moonshield",
         "nft add chain inet moonshield ms_nat_post { type nat hook postrouting priority 100 ; }",
@@ -526,16 +563,22 @@ def _garantir_tabela_nat():
 
 
 def _persistir_sysctl(chave: str, valor: str):
-    """Salva configuração no /etc/sysctl.d/99-moonshield.conf."""
+    """Salva configuração no /etc/sysctl.d/99-moonshield.conf sem duplicar."""
     try:
         conf = "/etc/sysctl.d/99-moonshield.conf"
-        conteudo = ""
+        linhas = []
         if os.path.exists(conf):
             with open(conf) as f:
-                conteudo = f.read()
-        if chave not in conteudo:
-            with open(conf, "a") as f:
-                f.write(f"\n# MoonShield NetForge\n{chave} = {valor}\n")
+                linhas = f.readlines()
+
+        # Remove linhas antigas com a mesma chave
+        linhas = [l for l in linhas if not l.strip().startswith(chave)]
+
+        # Adiciona a nova
+        linhas.append(f"{chave} = {valor}\n")
+
+        with open(conf, "w") as f:
+            f.writelines(linhas)
     except Exception:
         pass
 
@@ -661,14 +704,12 @@ def menu_principal():
 
         interfaces = listar_interfaces()
 
-        # Status resumido no topo
         linha_texto("  -- Interfaces ativas ----------------------------------", C_NEON)
         for iface in interfaces:
             cor  = C_OK if iface["estado"] == "UP" else C_ERRO
             info = f"  {iface['nome'].ljust(10)} {iface['ip'].ljust(16)} /{iface['mask']}"
             linha_texto(info, cor)
 
-        # ip_forward
         ok_fw, fw_val, _ = rodar("sysctl net.ipv4.ip_forward", silencioso=True)
         fw = fw_val.split("=")[-1].strip() if ok_fw and "=" in fw_val else "?"
         cor_fw = C_OK if fw == "1" else C_ERRO
