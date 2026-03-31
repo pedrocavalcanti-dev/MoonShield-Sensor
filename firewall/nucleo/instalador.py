@@ -280,11 +280,19 @@ def obter_status() -> dict:
     persistente        = verificar_persistente() if instalado else False
     chains             = verificar_chains() if instalado else {}
 
-    # Detecta se o ms_confignet está ativo
-    netforge_ativa = False
+    # Detecta se o ms_confignet está ativo e qual backend ele usa
+    netforge_ativa    = False
+    backend_confignet = "—"
     if disponivel:
         code, out, _ = run_cmd("nft list tables", silencioso=True)
         netforge_ativa = code == 0 and "netforge" in out
+        if netforge_ativa:
+            backend_confignet = "nftables"
+        else:
+            # Verifica se está usando iptables
+            code2, out2, _ = run_cmd("iptables -t nat -L POSTROUTING -n 2>/dev/null")
+            if code2 == 0 and ("MASQUERADE" in out2 or "SNAT" in out2):
+                backend_confignet = "iptables"
 
     return {
         "nftables_ok":        disponivel,
@@ -296,6 +304,7 @@ def obter_status() -> dict:
         "versao_instalador":  VERSAO_INSTALADOR,
         "chains":             chains,
         "netforge_ativa":     netforge_ativa,
+        "backend_confignet":  backend_confignet,
     }
 
 

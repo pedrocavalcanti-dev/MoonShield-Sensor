@@ -663,16 +663,16 @@ def _adicionar_rota_direta(ifaces: list[str], infos: dict):
     ok_fw, err_fw = rot.ativar_ip_forward()
     print_ok("ip_forward ativado") if ok_fw else print_aviso(f"ip_forward: {err_fw}")
 
-    # 2. Garante tabela netforge
-    _, out_t, _ = rodar("nft list tables", silencioso=True)
-    if "netforge" not in (out_t or ""):
-        ok_tab, err_tab = rot.criar_tabela()
-        if ok_tab:
-            print_ok("Tabela netforge criada")
-        else:
-            print_erro(f"Erro ao criar tabela: {err_tab}")
-            aguardar_enter()
-            return
+    # 2. Limpa tabela netforge completamente antes de aplicar (evita duplicatas)
+    print_info("Limpando regras antigas...")
+    rot.limpar_tabela()
+    ok_tab, err_tab = rot.criar_tabela()
+    if ok_tab:
+        print_ok("Tabela netforge recriada do zero")
+    else:
+        print_erro(f"Erro ao criar tabela: {err_tab}")
+        aguardar_enter()
+        return
 
     # 3. MASQUERADE na WAN
     ok_nat, err_nat = rot.aplicar_masquerade(wan)
@@ -688,9 +688,17 @@ def _adicionar_rota_direta(ifaces: list[str], infos: dict):
     else:
         print_erro(f"Erro no FORWARD: {err_fwd}")
 
+    # 5. Mostra como ficou
     linha_vazia()
+    linha_texto("  -- Regras aplicadas ------------------------------------", C_NEON)
+    for r in rot.listar_regras_nat():
+        linha_texto(f"  NAT    : {r}", C_OK)
+    for r in rot.listar_forwards():
+        linha_texto(f"  FORWARD: {r}", C_OK)
+    linha_vazia()
+
     if ok_fwd and ok_nat:
-        print_ok(f"Pronto! {lan} (clientes) → {wan} (internet) com NAT ativo.")
+        print_ok(f"Pronto! {lan} → {wan} com NAT. Teste: ping 8.8.8.8 no cliente.")
     else:
         print_aviso("Aplicado com avisos — veja erros acima.")
 
