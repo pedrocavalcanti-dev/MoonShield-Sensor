@@ -4,13 +4,14 @@ firewall/nucleo/instalador.py
 Instala e remove as regras nftables de monitoramento do MoonShield.
 
 Cria uma tabela isolada 'moonshield' com chains completas:
-  ms_input    → filtra tráfego destinado à própria máquina (INPUT)
-  ms_forward  → filtra tráfego roteado entre interfaces (FORWARD)
+  ms_input     → filtra tráfego destinado à própria máquina (INPUT)
+  ms_forward   → filtra tráfego roteado entre interfaces (FORWARD)
   ms_emergency → regras de emergência, avaliadas antes das normais
-  ms_rules    → regras sincronizadas pelo painel (populadas pelo conversor)
+  ms_rules     → regras sincronizadas pelo painel (populadas pelo conversor)
 
-v2: inclui ms_emergency e ms_rules na instalação base, versao_instalador
-    nos stats, e campo VERSAO_REGRAS para rastreamento.
+v3: separação de tabelas (moonshield ≠ netforge), migração de NAT do
+    iptables para nftables ao instalar, preservação da tabela netforge
+    criada pelo ms_confignet.
 ──────────────────────────────────────────────────────────────────────
 """
 
@@ -22,7 +23,7 @@ from nucleo.utilitarios import run_cmd, cmd_existe, servico_ativo
 # VERSÃO
 # ══════════════════════════════════════════════════════════════════════════════
 
-VERSAO_INSTALADOR = "2.0"
+VERSAO_INSTALADOR = "3.0"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CONSTANTES
@@ -34,9 +35,6 @@ NOME_TABELA  = "moonshield"
 ARQUIVO_CONF     = Path("/etc/nftables.d/moonshield.conf")
 ARQUIVO_CONF_ALT = Path("/etc/nftables.conf")
 
-# v2: inclui ms_emergency e ms_rules na tabela base
-# O sincronizador popula ms_rules via 'add rule inet moonshield ms_rules ...'
-# O ms_emergency fica vazio por padrão — reservado para bloqueios de emergência
 REGRAS = f"""\
 # MoonShield — regras de monitoramento de firewall  v{VERSAO_INSTALADOR}
 # Gerado automaticamente pelo ms_firewall.py
@@ -108,6 +106,87 @@ def verificar_chains() -> dict[str, bool]:
         resultado[chain] = f"chain {chain}" in out
     return resultado
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DETECÇÃO E MIGRAÇÃO DE NAT (iptables → nftables)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _detectar_nat_iptables() -> list[dict]:
+    """
+    Lê regras MASQUERADE/SNAT do iptables antes de subir o nftables.
+    Retorna lista de {'iface_out': 'enp0s3'} para cada regra encontrada.
+    Formato da linha: pkts bytes target prot opt in out src dst [options]
+    """
+    regras = []
+    try:
+        code, out, _ = run_cmd("iptables -t nat -L POSTROUTING -n -v")
+        if code != 0:
+            return []
+        for linha in out.splitlines():
+            if "MASQUERADE" not in linha and "SNAT" not in linha:
+                continue
+            partes = linha.split()
+            # colunas: pkts bytes target prot opt in out src dst ...
+            if len(partes) >= 7:
+                iface_out = partes[6]
+                if iface_out and iface_out != "*":
+                    # Evita duplicatas
+                    if not any(r["iface_out"] == iface_out for r in regras):
+                        regras.append({"iface_out": iface_out})
+    except Exception:
+        pass
+    return regras
+
+
+def _detectar_ip_forward() -> bool:
+    code, out, _ = run_cmd("sysctl net.ipv4.ip_forward")
+    return "= 1" in out if code == 0 else False
+
+
+def _migrar_nat_para_nft(regras_nat: list[dict]):
+    """
+    Cria chain ms_nat na tabela moonshield e adiciona MASQUERADE
+    para cada interface que tinha no iptables.
+    Usa família inet para compatibilidade com kernels >= 5.2.
+    """
+    if not regras_nat:
+        return
+
+    # Cria chain NAT se não existir
+    run_cmd(
+        "nft add chain inet moonshield ms_nat "
+        "{ type nat hook postrouting priority 100 ; }",
+        silencioso=True,
+    )
+
+    for r in regras_nat:
+        iface = r["iface_out"]
+        run_cmd(
+            f'nft add rule inet moonshield ms_nat oifname "{iface}" masquerade',
+            silencioso=True,
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PRESERVAÇÃO DA TABELA NETFORGE (ms_confignet)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _preservar_roteamento_netforge():
+    """
+    Garante que a tabela 'netforge' (criada pelo ms_confignet) nunca é
+    tocada pelo instalador do MoonShield.
+
+    Esta função apenas verifica a existência da tabela para fins de log.
+    O instalador do MoonShield opera exclusivamente na tabela 'moonshield'
+    e nunca emite flush ruleset completo — por isso a netforge está sempre
+    preservada por design.
+    """
+    code, out, _ = run_cmd("nft list tables", silencioso=True)
+    if code == 0 and "netforge" in out:
+        # Tabela netforge presente — não tocamos nela
+        pass
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # INSTALAR
 # ══════════════════════════════════════════════════════════════════════════════
@@ -116,6 +195,10 @@ def instalar_regras() -> tuple[bool, str]:
     ok, msg = verificar_nftables()
     if not ok:
         return False, msg
+
+    # ── Snapshot do estado ANTES de qualquer mudança ─────────────────────────
+    ip_forward_ativo = _detectar_ip_forward()
+    nat_existente    = _detectar_nat_iptables()
 
     if verificar_instalado():
         remover_regras(silencioso=True)
@@ -141,9 +224,21 @@ def instalar_regras() -> tuple[bool, str]:
     if chains_faltando:
         return False, f"Tabela criada mas chains ausentes: {', '.join(chains_faltando)}"
 
+    # ── Migra NAT do iptables para nftables ──────────────────────────────────
+    if nat_existente:
+        _migrar_nat_para_nft(nat_existente)
+        if ip_forward_ativo:
+            run_cmd("sysctl -w net.ipv4.ip_forward=1", silencioso=True)
+
+    # ── Preserva tabela netforge (ms_confignet) — nunca a tocamos ────────────
+    _preservar_roteamento_netforge()
+
     ok_p, msg_p = _tornar_persistente()
 
     resultado = f"Regras instaladas com sucesso (v{VERSAO_INSTALADOR})."
+    if nat_existente:
+        ifaces = [r["iface_out"] for r in nat_existente]
+        resultado += f"\nNAT migrado do iptables: {', '.join(ifaces)}"
     if ok_p:
         resultado += f"\nPersistencia configurada em: {msg_p}"
     else:
@@ -179,11 +274,17 @@ def listar_regras() -> tuple[bool, str]:
 
 
 def obter_status() -> dict:
-    """v2: inclui versao_instalador e status das chains."""
+    """v3: inclui versao_instalador, status das chains e presença da tabela netforge."""
     disponivel, versao = verificar_nftables()
-    instalado   = verificar_instalado() if disponivel else False
-    persistente = verificar_persistente() if instalado else False
-    chains      = verificar_chains() if instalado else {}
+    instalado          = verificar_instalado() if disponivel else False
+    persistente        = verificar_persistente() if instalado else False
+    chains             = verificar_chains() if instalado else {}
+
+    # Detecta se o ms_confignet está ativo
+    netforge_ativa = False
+    if disponivel:
+        code, out, _ = run_cmd("nft list tables", silencioso=True)
+        netforge_ativa = code == 0 and "netforge" in out
 
     return {
         "nftables_ok":        disponivel,
@@ -194,7 +295,9 @@ def obter_status() -> dict:
         "nome_tabela":        NOME_TABELA,
         "versao_instalador":  VERSAO_INSTALADOR,
         "chains":             chains,
+        "netforge_ativa":     netforge_ativa,
     }
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PERSISTÊNCIA
