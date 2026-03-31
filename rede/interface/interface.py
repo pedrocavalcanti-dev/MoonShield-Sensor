@@ -600,7 +600,14 @@ def _menu_roteamento_direto():
 
 
 def _adicionar_rota_direta(ifaces: list[str], infos: dict):
-    """Coleta origem/destino e aplica o FORWARD."""
+    """
+    Coleta LAN e WAN explicitamente e aplica FORWARD + MASQUERADE.
+
+    Pergunta separado:
+      - Qual é a interface LAN (onde estão os clientes/Windows)
+      - Qual é a interface WAN (saída para internet)
+    Assim não depende de o usuário saber o conceito de origem/destino.
+    """
     cabecalho("Adicionar rota direta")
 
     linha_texto("  Interfaces disponíveis:", C_DIM)
@@ -609,51 +616,54 @@ def _adicionar_rota_direta(ifaces: list[str], infos: dict):
         linha_texto(f"  [{idx}]  {nome.ljust(12)} {ip_atual}", C_WHITE)
     linha_vazia()
 
-    orig_str = input_campo("Número da interface ORIGEM")
-    dest_str = input_campo("Número da interface DESTINO")
+    linha_texto("  LAN = onde estao os PCs / Windows", C_DIM)
+    linha_texto("  WAN = cabo que vem da internet / roteador", C_DIM)
+    linha_vazia()
 
-    if not orig_str.isdigit() or not dest_str.isdigit():
+    lan_str = input_campo("Número da interface LAN (clientes)")
+    wan_str = input_campo("Número da interface WAN (internet)")
+
+    if not lan_str.isdigit() or not wan_str.isdigit():
         print_erro("Entrada inválida — digite o número da interface.")
         aguardar_enter()
         return
 
-    idx_orig = int(orig_str)
-    idx_dest = int(dest_str)
+    idx_lan = int(lan_str)
+    idx_wan = int(wan_str)
 
-    if idx_orig == idx_dest:
-        print_erro("Origem e destino não podem ser a mesma interface.")
+    if idx_lan == idx_wan:
+        print_erro("LAN e WAN não podem ser a mesma interface.")
         aguardar_enter()
         return
 
-    if idx_orig >= len(ifaces) or idx_dest >= len(ifaces):
+    if idx_lan >= len(ifaces) or idx_wan >= len(ifaces):
         print_erro("Número fora do intervalo.")
         aguardar_enter()
         return
 
-    origem  = ifaces[idx_orig]
-    destino = ifaces[idx_dest]
+    lan = ifaces[idx_lan]
+    wan = ifaces[idx_wan]
 
     linha_vazia()
-    linha_texto(f"  Origem  : {origem}", C_WHITE)
-    linha_texto(f"  Destino : {destino}", C_WHITE)
+    linha_texto(f"  LAN (clientes) : {lan}", C_OK)
+    linha_texto(f"  WAN (internet) : {wan}", C_OK)
+    linha_vazia()
+    linha_texto("  Vai aplicar: MASQUERADE + FORWARD LAN→WAN", C_DIM)
     linha_vazia()
 
-    # Pergunta se destino é WAN (saída para internet)
-    e_wan = input_campo(
-        f"'{destino}' é a saída para internet (WAN)? Aplica NAT/MASQUERADE. (s/n)",
-        "n",
-    ).strip().lower()
+    conf = input_campo("Confirmar? (s/n)", "s").strip().lower()
+    if conf != "s":
+        print_info("Cancelado.")
+        aguardar_enter()
+        return
 
     print()
 
-    # 1. Garante ip_forward ativo
+    # 1. ip_forward
     ok_fw, err_fw = rot.ativar_ip_forward()
-    if ok_fw:
-        print_ok("ip_forward ativado")
-    else:
-        print_aviso(f"ip_forward: {err_fw}")
+    print_ok("ip_forward ativado") if ok_fw else print_aviso(f"ip_forward: {err_fw}")
 
-    # 2. Garante que a tabela netforge existe
+    # 2. Garante tabela netforge
     _, out_t, _ = rodar("nft list tables", silencioso=True)
     if "netforge" not in (out_t or ""):
         ok_tab, err_tab = rot.criar_tabela()
@@ -664,27 +674,25 @@ def _adicionar_rota_direta(ifaces: list[str], infos: dict):
             aguardar_enter()
             return
 
-    # 3. MASQUERADE se for WAN
-    if e_wan == "s":
-        ok_nat, err_nat = rot.aplicar_masquerade(destino)
-        if ok_nat:
-            print_ok(f"MASQUERADE aplicado em {destino}")
-        else:
-            print_aviso(f"MASQUERADE: {err_nat}")
-
-    # 4. FORWARD bidirecional
-    if e_wan == "s":
-        # LAN → WAN com retorno stateful
-        ok_fwd, err_fwd = rot.aplicar_forward_interface_wan(origem, destino)
+    # 3. MASQUERADE na WAN
+    ok_nat, err_nat = rot.aplicar_masquerade(wan)
+    if ok_nat:
+        print_ok(f"MASQUERADE em {wan}")
     else:
-        # Bidirecional completo (interno ↔ interno)
-        ok_fwd, err_fwd = rot.aplicar_forward_entre_interfaces(origem, destino)
+        print_aviso(f"MASQUERADE: {err_nat}")
 
+    # 4. FORWARD LAN → WAN com retorno stateful
+    ok_fwd, err_fwd = rot.aplicar_forward_interface_wan(lan, wan)
     if ok_fwd:
-        seta = f"{origem} → {destino} (+ NAT)" if e_wan == "s" else f"{origem} ↔ {destino}"
-        print_ok(f"Roteamento ativo: {seta}")
+        print_ok(f"FORWARD: {lan} → {wan} (retorno stateful)")
     else:
         print_erro(f"Erro no FORWARD: {err_fwd}")
+
+    linha_vazia()
+    if ok_fwd and ok_nat:
+        print_ok(f"Pronto! {lan} (clientes) → {wan} (internet) com NAT ativo.")
+    else:
+        print_aviso("Aplicado com avisos — veja erros acima.")
 
     aguardar_enter()
 
