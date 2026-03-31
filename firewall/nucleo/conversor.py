@@ -19,26 +19,26 @@ def regra_para_nft_inline(regra: dict, iface_map: dict | None = None) -> str | N
     im     = {**IFACE_MAP_DEFAULT, **(iface_map or {})}
     partes = []
 
-    # 1. Interface
-    iface      = regra.get("iface", "any")
-    iface_nome = im.get(iface, iface if iface != "any" else "")
+    # 1. Interface (Protegido contra ANY maiúsculo)
+    iface      = str(regra.get("iface") or "any").strip()
+    iface_nome = im.get(iface, iface if iface.lower() != "any" else "")
     if iface_nome:
         direcao = "iifname" if regra.get("dir", "in") == "in" else "oifname"
         partes.append(f'{direcao} "{iface_nome}"')
 
-    # 2. IP origem
-    src = (regra.get("src") or "any").strip()
-    if src and src != "any":
+    # 2. IP origem (Protegido contra ANY maiúsculo)
+    src = str(regra.get("src") or "any").strip()
+    if src and src.lower() != "any":
         partes.append(f"ip saddr {src}")
 
-    # 3. IP destino
-    dst = (regra.get("dst") or "any").strip()
-    if dst and dst != "any":
+    # 3. IP destino (Protegido contra ANY maiúsculo)
+    dst = str(regra.get("dst") or "any").strip()
+    if dst and dst.lower() != "any":
         partes.append(f"ip daddr {dst}")
 
-    # 4 e 5. Protocolo e Porta
-    proto = (regra.get("proto") or "any").lower()
-    port = str(regra.get("port") or "any").strip()
+    # 4 e 5. Protocolo e Porta (Convertidos para minúsculo na marra)
+    proto = str(regra.get("proto") or "any").strip().lower()
+    port  = str(regra.get("port") or "any").strip().lower()
 
     if proto == "icmp":
         partes.append("ip protocol icmp")
@@ -58,7 +58,7 @@ def regra_para_nft_inline(regra: dict, iface_map: dict | None = None) -> str | N
         partes.append(f"ip protocol {proto}")
 
     # 6. Ação
-    if regra.get("action") == "allow":
+    if str(regra.get("action")).lower() == "allow":
         partes.append("accept")
     else:
         partes.append("drop")
@@ -68,16 +68,20 @@ def regra_para_nft_inline(regra: dict, iface_map: dict | None = None) -> str | N
 
 def preview_regra(regra: dict, iface_map: dict | None = None) -> str:
     im    = {**IFACE_MAP_DEFAULT, **(iface_map or {})}
-    iface = regra.get("iface", "any")
-    nome  = im.get(iface, iface if iface != "any" else "any")
-    proto = (regra.get("proto") or "any").upper()
-    port  = str(regra.get("port") or "any").strip()
-    acao  = "ACCEPT" if regra.get("action") == "allow" else "DROP"
-    proto_port = f"{proto}:{port}" if port != "any" else proto
+    iface = str(regra.get("iface") or "any").strip()
+    nome  = im.get(iface, iface if iface.lower() != "any" else "any")
+    
+    proto = str(regra.get("proto") or "any").strip().upper()
+    port  = str(regra.get("port") or "any").strip().upper()
+    acao  = "ACCEPT" if str(regra.get("action")).lower() == "allow" else "DROP"
+    
+    proto_port = f"{proto}:{port}" if port != "ANY" else proto
     partes = [nome, proto_port, acao]
-    src = (regra.get("src") or "any").strip()
-    if src and src != "any":
+    
+    src = str(regra.get("src") or "any").strip()
+    if src and src.lower() != "any":
         partes.insert(0, f"src:{src}")
+        
     return "  ".join(partes)
 
 
@@ -113,7 +117,7 @@ def validar_iface_map(iface_map: dict) -> list[str]:
     import os
     avisos = []
     for logico, real in iface_map.items():
-        if not real or logico == "any":
+        if not real or logico.lower() == "any":
             continue
         if not os.path.exists(f"/sys/class/net/{real}"):
             avisos.append(

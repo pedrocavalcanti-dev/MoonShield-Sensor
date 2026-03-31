@@ -28,7 +28,7 @@ from nucleo.utilitarios import agora
 logger = logging.getLogger(__name__)
 
 VERSAO_SINCRONIZADOR = "5.0"
-POLL_INTERVAL        = 30
+POLL_INTERVAL        = 3    # <-- Alterado para 3 segundos para aplicar super rápido!
 PENDING_PATH         = "/firewall/api/pending-rules/"
 CONFIRM_PATH         = "/firewall/api/confirm-rules/"
 TMP_NFT_FILE         = "/tmp/ms_rules_sync.nft"
