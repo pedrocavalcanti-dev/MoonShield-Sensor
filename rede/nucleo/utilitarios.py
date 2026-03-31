@@ -20,6 +20,9 @@ def rodar(cmd, silencioso: bool = False) -> tuple[bool, str, str]:
     - Se cmd for str   → subprocess com shell=True (para pipes etc.).
     Timeout padrão: 20 segundos.
     """
+    if not cmd:
+        return False, "", "Comando vazio."
+
     try:
         usa_shell = isinstance(cmd, str)
         r = subprocess.run(
@@ -40,6 +43,8 @@ def rodar(cmd, silencioso: bool = False) -> tuple[bool, str, str]:
 
 def comando_existe(nome: str) -> bool:
     """Verifica se um executável está disponível no PATH."""
+    if not nome:
+        return False
     ok, _, _ = rodar(["which", nome], silencioso=True)
     return ok
 
@@ -50,6 +55,8 @@ def comando_existe(nome: str) -> bool:
 
 def validar_ip(ip: str) -> bool:
     """Retorna True se o IP for válido (sem máscara)."""
+    if not ip:
+        return False
     try:
         ipaddress.IPv4Address(ip)
         return True
@@ -59,6 +66,8 @@ def validar_ip(ip: str) -> bool:
 
 def validar_cidr(cidr: str) -> bool:
     """Retorna True se a rede CIDR for válida (ex: 10.10.10.0/24)."""
+    if not cidr:
+        return False
     try:
         ipaddress.IPv4Network(cidr, strict=False)
         return True
@@ -68,19 +77,29 @@ def validar_cidr(cidr: str) -> bool:
 
 def validar_vlan_id(vid: int) -> bool:
     """VLANs válidas: 1–4094."""
-    return 1 <= vid <= 4094
+    try:
+        vid_int = int(vid)
+        return 1 <= vid_int <= 4094
+    except (ValueError, TypeError):
+        return False
 
 
 def ip_na_rede(ip: str, cidr: str) -> bool:
     """Verifica se o IP pertence à rede CIDR."""
+    if not ip or not cidr:
+        return False
     try:
-        return ipaddress.IPv4Address(ip) in ipaddress.IPv4Network(cidr, strict=False)
+        endereco = ipaddress.IPv4Address(ip)
+        rede = ipaddress.IPv4Network(cidr, strict=False)
+        return endereco in rede
     except ValueError:
         return False
 
 
 def prefixo_de_cidr(cidr: str) -> str:
     """Extrai o prefixo de uma rede CIDR. Ex: '10.0.0.0/24' → '24'."""
+    if not cidr:
+        return "24" # Fallback seguro
     return cidr.split("/")[1] if "/" in cidr else "24"
 
 
@@ -93,6 +112,7 @@ def listar_interfaces_sistema() -> list[str]:
     ok, saida, _ = rodar("ip -o link show", silencioso=True)
     if not ok:
         return []
+    
     interfaces = []
     for linha in saida.splitlines():
         m = re.match(r"\d+:\s+(\S+):", linha)
@@ -115,6 +135,8 @@ def gateway_padrao() -> str | None:
 
 def ip_da_interface(nome: str) -> str | None:
     """Retorna o primeiro IP (sem máscara) de uma interface ou None."""
+    if not nome:
+        return None
     ok, saida, _ = rodar(f"ip -o -4 addr show dev {nome} 2>/dev/null", silencioso=True)
     if ok and saida:
         m = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", saida)
@@ -124,5 +146,8 @@ def ip_da_interface(nome: str) -> str | None:
 
 
 def interface_existe(nome: str) -> bool:
+    """Verifica fisicamente se a interface existe no Linux."""
+    if not nome:
+        return False
     ok, _, _ = rodar(["ip", "link", "show", nome], silencioso=True)
     return ok
