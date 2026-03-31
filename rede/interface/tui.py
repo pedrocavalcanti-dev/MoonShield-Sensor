@@ -29,33 +29,48 @@ LARGURA = 62
 # ─────────────────────────────────────────────────────────────────────────────
 
 def limpar():
+    """Limpa a tela do terminal."""
     os.system("clear")
 
 
 def topo():
+    """Imprime a borda superior da interface."""
     print(C_BORDA + "  +" + "=" * LARGURA + "+" + C_RESET)
 
 
 def fundo():
+    """Imprime a borda inferior da interface."""
     print(C_BORDA + "  +" + "=" * LARGURA + "+" + C_RESET)
 
 
 def separador():
+    """Imprime uma linha separadora dentro do menu."""
     print(C_BORDA + "  +" + "-" * LARGURA + "+" + C_RESET)
 
 
 def linha_vazia():
+    """Imprime uma linha em branco preservando as bordas laterais."""
     print(C_BORDA + "  |" + " " * LARGURA + "|" + C_RESET)
 
 
 def linha_texto(texto: str, cor: str = C_WHITE, alinhamento: str = "esquerda"):
-    texto_puro = texto  # Para cálculo de padding (sem escape codes)
+    """
+    Imprime uma linha de texto formatada dentro das bordas.
+    Evita quebra de layout truncando textos muito longos.
+    """
+    texto_puro = str(texto)
+    
+    # Previne quebra de layout: se for maior que a largura, trunca com "..."
+    if len(texto_puro) > LARGURA - 2:
+        texto_puro = texto_puro[:LARGURA - 5] + "..."
+
     if alinhamento == "centro":
         pad = max(0, (LARGURA - len(texto_puro)) // 2)
         conteudo = " " * pad + texto_puro
     else:
         conteudo = " " + texto_puro
-    conteudo = conteudo[:LARGURA].ljust(LARGURA)
+        
+    conteudo = conteudo.ljust(LARGURA)
     print(C_BORDA + "  |" + cor + conteudo + C_RESET + C_BORDA + "|" + C_RESET)
 
 
@@ -64,6 +79,7 @@ def linha_texto(texto: str, cor: str = C_WHITE, alinhamento: str = "esquerda"):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def cabecalho(subtitulo: str = ""):
+    """Imprime o cabeçalho padrão de todas as telas."""
     limpar()
     topo()
     linha_texto("MOONSHIELD  ·  CONFIG NET  v1.0", C_TITULO, "centro")
@@ -99,6 +115,7 @@ def print_info(msg: str):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def input_campo(label: str, padrao: str = "") -> str:
+    """Solicita um input do usuário com um valor padrão opcional."""
     hint = f" [{padrao}]" if padrao else ""
     print(C_AVISO + f"  > {label}{hint}: " + C_WHITE, end="", flush=True)
     try:
@@ -109,6 +126,7 @@ def input_campo(label: str, padrao: str = "") -> str:
 
 
 def aguardar_enter():
+    """Pausa a execução até o usuário pressionar ENTER."""
     print()
     print(C_DIM + "  Pressione ENTER para continuar..." + C_RESET, end="", flush=True)
     try:
@@ -118,6 +136,7 @@ def aguardar_enter():
 
 
 def ler_opcao(prompt: str = "Opcao") -> str:
+    """Lê uma opção do menu, retornando a string em maiúsculo."""
     print(C_AVISO + f"  > {prompt}: " + C_WHITE, end="", flush=True)
     try:
         return input().strip().upper()
@@ -141,7 +160,7 @@ def exibir_resultados(resultados: list[tuple[str, bool, str]]):
 
 
 def resumo_resultados(resultados: list[tuple[str, bool, str]]) -> tuple[int, int]:
-    """Retorna (sucessos, falhas)."""
+    """Retorna a contagem de (sucessos, falhas)."""
     ok_count  = sum(1 for _, ok, _ in resultados if ok)
     err_count = sum(1 for _, ok, _ in resultados if not ok)
     return ok_count, err_count
