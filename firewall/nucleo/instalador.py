@@ -96,7 +96,6 @@ def verificar_persistente() -> bool:
 
 
 def verificar_chains() -> dict[str, bool]:
-    """v2: verifica se cada chain esperada existe na tabela."""
     chains_esperadas = ["ms_input", "ms_forward", "ms_emergency", "ms_rules"]
     resultado = {}
     if not verificar_instalado():
@@ -126,11 +125,9 @@ def _detectar_nat_iptables() -> list[dict]:
             if "MASQUERADE" not in linha and "SNAT" not in linha:
                 continue
             partes = linha.split()
-            # colunas: pkts bytes target prot opt in out src dst ...
             if len(partes) >= 7:
                 iface_out = partes[6]
                 if iface_out and iface_out != "*":
-                    # Evita duplicatas
                     if not any(r["iface_out"] == iface_out for r in regras):
                         regras.append({"iface_out": iface_out})
     except Exception:
@@ -152,19 +149,12 @@ def _migrar_nat_para_nft(regras_nat: list[dict]):
     if not regras_nat:
         return
 
-    # Cria chain NAT se não existir
-    run_cmd(
-        "nft add chain inet moonshield ms_nat "
-        "{ type nat hook postrouting priority 100 ; }",
-        silencioso=True,
-    )
+    # Cria chain NAT se não existir (SEM o silencioso=True)
+    run_cmd("nft add chain inet moonshield ms_nat { type nat hook postrouting priority 100 ; }")
 
     for r in regras_nat:
         iface = r["iface_out"]
-        run_cmd(
-            f'nft add rule inet moonshield ms_nat oifname "{iface}" masquerade',
-            silencioso=True,
-        )
+        run_cmd(f'nft add rule inet moonshield ms_nat oifname "{iface}" masquerade')
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -175,15 +165,9 @@ def _preservar_roteamento_netforge():
     """
     Garante que a tabela 'netforge' (criada pelo ms_confignet) nunca é
     tocada pelo instalador do MoonShield.
-
-    Esta função apenas verifica a existência da tabela para fins de log.
-    O instalador do MoonShield opera exclusivamente na tabela 'moonshield'
-    e nunca emite flush ruleset completo — por isso a netforge está sempre
-    preservada por design.
     """
-    code, out, _ = run_cmd("nft list tables", silencioso=True)
+    code, out, _ = run_cmd("nft list tables")
     if code == 0 and "netforge" in out:
-        # Tabela netforge presente — não tocamos nela
         pass
 
 
@@ -196,11 +180,11 @@ def instalar_regras() -> tuple[bool, str]:
     if not ok:
         return False, msg
 
-    # ── Snapshot do estado ANTES de qualquer mudança ─────────────────────────
     ip_forward_ativo = _detectar_ip_forward()
     nat_existente    = _detectar_nat_iptables()
 
     if verificar_instalado():
+        # AQUI mantemos silencioso=True porque a função remover_regras aceita esse parâmetro!
         remover_regras(silencioso=True)
 
     tmp = "/tmp/ms_fw_rules.nft"
@@ -218,19 +202,16 @@ def instalar_regras() -> tuple[bool, str]:
     if not verificar_instalado():
         return False, "Regras enviadas mas tabela nao encontrada — verifique com: nft list tables"
 
-    # v2: verifica se todas as chains foram criadas
     chains = verificar_chains()
     chains_faltando = [c for c, ok in chains.items() if not ok]
     if chains_faltando:
         return False, f"Tabela criada mas chains ausentes: {', '.join(chains_faltando)}"
 
-    # ── Migra NAT do iptables para nftables ──────────────────────────────────
     if nat_existente:
         _migrar_nat_para_nft(nat_existente)
         if ip_forward_ativo:
-            run_cmd("sysctl -w net.ipv4.ip_forward=1", silencioso=True)
+            run_cmd("sysctl -w net.ipv4.ip_forward=1")
 
-    # ── Preserva tabela netforge (ms_confignet) — nunca a tocamos ────────────
     _preservar_roteamento_netforge()
 
     ok_p, msg_p = _tornar_persistente()
@@ -274,22 +255,19 @@ def listar_regras() -> tuple[bool, str]:
 
 
 def obter_status() -> dict:
-    """v3: inclui versao_instalador, status das chains e presença da tabela netforge."""
     disponivel, versao = verificar_nftables()
     instalado          = verificar_instalado() if disponivel else False
     persistente        = verificar_persistente() if instalado else False
     chains             = verificar_chains() if instalado else {}
 
-    # Detecta se o ms_confignet está ativo e qual backend ele usa
     netforge_ativa    = False
     backend_confignet = "—"
     if disponivel:
-        code, out, _ = run_cmd("nft list tables", silencioso=True)
+        code, out, _ = run_cmd("nft list tables")
         netforge_ativa = code == 0 and "netforge" in out
         if netforge_ativa:
             backend_confignet = "nftables"
         else:
-            # Verifica se está usando iptables
             code2, out2, _ = run_cmd("iptables -t nat -L POSTROUTING -n 2>/dev/null")
             if code2 == 0 and ("MASQUERADE" in out2 or "SNAT" in out2):
                 backend_confignet = "iptables"
