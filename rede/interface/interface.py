@@ -7,6 +7,7 @@ Estrutura de menus:
     ├── menu_interfaces()       — configurar IP/DHCP em interfaces físicas
     ├── menu_vlans()            — gerenciar VLANs (cadastrar, aplicar, remover)
     ├── menu_roteamento()       — NAT, ip_forward, aplicar roteamento completo
+    │     └── [5] roteamento direto entre interfaces físicas (sem VLAN)
     ├── menu_relay()            — configurar e controlar DHCP relay
     ├── menu_configuracoes()    — trunk, WAN, servidor DHCP
     └── menu_status()           — status completo da rede
@@ -43,7 +44,6 @@ def menu_principal():
         config = db.carregar()
         cabecalho()
 
-        # Resumo rápido
         trunk = config.get("trunk_interface", "—")
         wan   = config.get("wan_interface", "—")
         dhcp  = config.get("dhcp_server", "—") or "—"
@@ -304,7 +304,6 @@ def _cadastrar_vlan(config: dict):
     rede    = input_campo("Rede CIDR (ex: 10.10.10.0/24)")
     gateway = input_campo("IP do gateway nesta VLAN (ex: 10.10.10.1)")
 
-    # Validações
     erros = []
     if not nome:
         erros.append("Nome obrigatório.")
@@ -430,8 +429,9 @@ def menu_roteamento():
         linha_vazia()
         linha_texto("  [1]  Aplicar roteamento completo (NAT + VLANs + ip_forward)", C_WHITE)
         linha_texto("  [2]  Ativar / Desativar ip_forward", C_WHITE)
-        linha_texto("  [3]  Limpar tabela nftables (moonshield)", C_AVISO)
-        linha_texto("  [4]  Ver regras NAT ativas", C_WHITE)
+        linha_texto("  [3]  Limpar tabela nftables (netforge)", C_AVISO)
+        linha_texto("  [4]  Ver regras NAT e FORWARD ativas", C_WHITE)
+        linha_texto("  [5]  Roteamento direto entre interfaces", C_WHITE)
         linha_texto("  [V]  Voltar", C_DIM)
         linha_vazia()
         fundo()
@@ -442,6 +442,7 @@ def menu_roteamento():
         elif op == "2": _toggle_ip_forward(fw)
         elif op == "3": _limpar_nftables()
         elif op == "4": _ver_regras_nat()
+        elif op == "5": _menu_roteamento_direto()
 
 
 def _aplicar_roteamento_completo(config: dict):
@@ -492,32 +493,213 @@ def _toggle_ip_forward(atual: str):
 
 def _limpar_nftables():
     cabecalho("Limpar Tabela nftables")
-    print_aviso("Isso remove TODAS as regras NAT e FORWARD do MoonShield.")
+    print_aviso("Isso remove TODAS as regras NAT e FORWARD da tabela netforge.")
     conf = input_campo("Confirmar? (s/n)", "n")
     if conf.lower() != "s":
         print_info("Cancelado.")
         aguardar_enter()
         return
     rot.limpar_tabela()
-    print_ok("Tabela moonshield removida.")
+    print_ok("Tabela netforge removida.")
     aguardar_enter()
 
 
 def _ver_regras_nat():
-    cabecalho("Regras NAT Ativas")
+    cabecalho("Regras NAT e FORWARD Ativas")
+
+    # NAT
+    linha_texto("  -- NAT (MASQUERADE) ------------------------------------", C_NEON)
     regras = rot.listar_regras_nat()
     if regras:
         for r in regras:
             linha_texto(f"  {r}", C_OK)
     else:
         linha_texto("  Sem regras NAT ativas.", C_DIM)
+
     linha_vazia()
-    rotas = rot.listar_rotas()
+
+    # FORWARD
+    linha_texto("  -- FORWARD ---------------------------------------------", C_NEON)
+    forwards = rot.listar_forwards()
+    if forwards:
+        for r in forwards:
+            linha_texto(f"  {r}", C_OK)
+    else:
+        linha_texto("  Sem regras FORWARD ativas.", C_DIM)
+
+    linha_vazia()
+
+    # Rotas
     linha_texto("  -- Rotas -----------------------------------------------", C_NEON)
-    for r in rotas[:10]:
+    for r in rot.listar_rotas()[:10]:
         linha_texto(f"  {r}", C_DIM)
+
     linha_vazia()
     fundo()
+    aguardar_enter()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MENU — ROTEAMENTO DIRETO ENTRE INTERFACES (sem VLAN)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _menu_roteamento_direto():
+    """
+    Permite rotear entre duas interfaces físicas quaisquer sem precisar
+    de VLANs. Ex: enp0s8 (rede interna) ↔ enp0s9 (outra rede interna).
+
+    Fluxo:
+      1. Lista interfaces disponíveis numeradas
+      2. Usuário escolhe origem e destino
+      3. Pergunta se o destino é WAN (para aplicar MASQUERADE + NAT)
+      4. Aplica ip_forward + FORWARD bidirecional + MASQUERADE se WAN
+    """
+    while True:
+        cabecalho("Roteamento direto entre interfaces")
+
+        ifaces = listar_interfaces_sistema()
+        # Remove subinterfaces VLAN da lista (têm ponto no nome)
+        ifaces = [i for i in ifaces if "." not in i]
+
+        if len(ifaces) < 2:
+            print_erro("Menos de 2 interfaces físicas disponíveis.")
+            aguardar_enter()
+            return
+
+        # Lista interfaces com IP atual para facilitar identificação
+        linha_texto("  #   INTERFACE    IP", C_DIM)
+        separador()
+        infos = {i["nome"]: i for i in _listar_ifaces_com_info()}
+        for idx, nome in enumerate(ifaces):
+            info = infos.get(nome, {})
+            ip_atual = info.get("ip", "—")
+            estado   = info.get("estado", "?")
+            cor      = C_OK if estado == "UP" else C_DIM
+            linha_texto(f"  [{idx}]  {nome.ljust(12)} {ip_atual}", cor)
+
+        linha_vazia()
+
+        # Mostra regras já ativas resumidas
+        forwards = rot.listar_forwards()
+        if forwards:
+            linha_texto("  -- FORWARD já ativas --------------------------------", C_NEON)
+            for r in forwards[:4]:
+                linha_texto(f"  {r}", C_DIM)
+            linha_vazia()
+
+        linha_texto("  [A]  Adicionar rota entre interfaces", C_WHITE)
+        linha_texto("  [L]  Limpar todas as rotas (tabela netforge)", C_AVISO)
+        linha_texto("  [V]  Voltar", C_DIM)
+        linha_vazia()
+        fundo()
+
+        op = ler_opcao()
+        if   op == "V": return
+        elif op == "A": _adicionar_rota_direta(ifaces, infos)
+        elif op == "L": _confirmar_limpar_netforge()
+
+
+def _adicionar_rota_direta(ifaces: list[str], infos: dict):
+    """Coleta origem/destino e aplica o FORWARD."""
+    cabecalho("Adicionar rota direta")
+
+    linha_texto("  Interfaces disponíveis:", C_DIM)
+    for idx, nome in enumerate(ifaces):
+        ip_atual = infos.get(nome, {}).get("ip", "—")
+        linha_texto(f"  [{idx}]  {nome.ljust(12)} {ip_atual}", C_WHITE)
+    linha_vazia()
+
+    orig_str = input_campo("Número da interface ORIGEM")
+    dest_str = input_campo("Número da interface DESTINO")
+
+    if not orig_str.isdigit() or not dest_str.isdigit():
+        print_erro("Entrada inválida — digite o número da interface.")
+        aguardar_enter()
+        return
+
+    idx_orig = int(orig_str)
+    idx_dest = int(dest_str)
+
+    if idx_orig == idx_dest:
+        print_erro("Origem e destino não podem ser a mesma interface.")
+        aguardar_enter()
+        return
+
+    if idx_orig >= len(ifaces) or idx_dest >= len(ifaces):
+        print_erro("Número fora do intervalo.")
+        aguardar_enter()
+        return
+
+    origem  = ifaces[idx_orig]
+    destino = ifaces[idx_dest]
+
+    linha_vazia()
+    linha_texto(f"  Origem  : {origem}", C_WHITE)
+    linha_texto(f"  Destino : {destino}", C_WHITE)
+    linha_vazia()
+
+    # Pergunta se destino é WAN (saída para internet)
+    e_wan = input_campo(
+        f"'{destino}' é a saída para internet (WAN)? Aplica NAT/MASQUERADE. (s/n)",
+        "n",
+    ).strip().lower()
+
+    print()
+
+    # 1. Garante ip_forward ativo
+    ok_fw, err_fw = rot.ativar_ip_forward()
+    if ok_fw:
+        print_ok("ip_forward ativado")
+    else:
+        print_aviso(f"ip_forward: {err_fw}")
+
+    # 2. Garante que a tabela netforge existe
+    _, out_t, _ = rodar("nft list tables", silencioso=True)
+    if "netforge" not in (out_t or ""):
+        ok_tab, err_tab = rot.criar_tabela()
+        if ok_tab:
+            print_ok("Tabela netforge criada")
+        else:
+            print_erro(f"Erro ao criar tabela: {err_tab}")
+            aguardar_enter()
+            return
+
+    # 3. MASQUERADE se for WAN
+    if e_wan == "s":
+        ok_nat, err_nat = rot.aplicar_masquerade(destino)
+        if ok_nat:
+            print_ok(f"MASQUERADE aplicado em {destino}")
+        else:
+            print_aviso(f"MASQUERADE: {err_nat}")
+
+    # 4. FORWARD bidirecional
+    if e_wan == "s":
+        # LAN → WAN com retorno stateful
+        ok_fwd, err_fwd = rot.aplicar_forward_interface_wan(origem, destino)
+    else:
+        # Bidirecional completo (interno ↔ interno)
+        ok_fwd, err_fwd = rot.aplicar_forward_entre_interfaces(origem, destino)
+
+    if ok_fwd:
+        seta = f"{origem} → {destino} (+ NAT)" if e_wan == "s" else f"{origem} ↔ {destino}"
+        print_ok(f"Roteamento ativo: {seta}")
+    else:
+        print_erro(f"Erro no FORWARD: {err_fwd}")
+
+    aguardar_enter()
+
+
+def _confirmar_limpar_netforge():
+    """Confirma e limpa toda a tabela netforge."""
+    cabecalho("Limpar tabela netforge")
+    print_aviso("Remove TODAS as regras de roteamento direto e NAT.")
+    conf = input_campo("Confirmar? (s/n)", "n")
+    if conf.lower() != "s":
+        print_info("Cancelado.")
+        aguardar_enter()
+        return
+    rot.limpar_tabela()
+    print_ok("Tabela netforge removida — sem regras ativas.")
     aguardar_enter()
 
 
@@ -698,13 +880,24 @@ def menu_status():
     linha_vazia()
 
     # NAT
-    linha_texto("  -- NAT (nftables) -------------------------------------", C_NEON)
+    linha_texto("  -- NAT (nftables / netforge) --------------------------", C_NEON)
     regras_nat = rot.listar_regras_nat()
     if regras_nat:
         for r in regras_nat:
             linha_texto(f"  {r}", C_OK)
     else:
         linha_texto("  Sem regras NAT ativas.", C_DIM)
+
+    linha_vazia()
+
+    # FORWARD direto
+    linha_texto("  -- FORWARD direto (netforge) --------------------------", C_NEON)
+    forwards = rot.listar_forwards()
+    if forwards:
+        for r in forwards[:6]:
+            linha_texto(f"  {r}", C_OK)
+    else:
+        linha_texto("  Sem regras FORWARD ativas.", C_DIM)
 
     linha_vazia()
 
