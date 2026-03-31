@@ -1,14 +1,7 @@
 """
 firewall/monitoramento/monitoramento.py
 ──────────────────────────────────────────────────────────────────────
-Loop de monitoramento do firewall.
-
-Lê o journald em tempo real via 'journalctl -f -k -g MS-',
-parseia cada linha com analisador.py e envia lotes HTTP para
-/firewall/api/ingest/ no MoonShield.
-
-v2: corrige import typo (nucelo→nucleo), contadores drops/allows,
-    heartbeat periódico a cada 5 min, VERSAO_MONITORAMENTO.
+Loop de monitoramento do firewall com Auto-Mapping de Interfaces.
 ──────────────────────────────────────────────────────────────────────
 """
 
@@ -19,21 +12,17 @@ import time
 
 from nucleo.utilitarios import agora
 from nucleo.configuracao import salvar_config
-from firewall.nucleo.analisador import parsear_linha   # fix: nucelo → nucleo
+from firewall.nucleo.analisador import parsear_linha
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CONSTANTES
 # ══════════════════════════════════════════════════════════════════════════════
 
-VERSAO_MONITORAMENTO = "2.0"
+VERSAO_MONITORAMENTO = "2.1"
 BATCH_SIZE           = 20
-BATCH_TIMEOUT        = 5      # segundos
-HEARTBEAT_INTERVAL   = 300    # 5 minutos — mantém last_seen atualizado no Django
+BATCH_TIMEOUT        = 5
+HEARTBEAT_INTERVAL   = 300
 INGEST_PATH          = "/firewall/api/ingest/"
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ESTADO LOCAL DO FIREWALL
-# ══════════════════════════════════════════════════════════════════════════════
 
 _fw_stats = {
     "vistos":         0,
@@ -56,11 +45,9 @@ def obter_stats() -> dict:
     with _fw_stats_lock:
         return dict(_fw_stats)
 
-
 def esta_rodando() -> bool:
     with _fw_stats_lock:
         return _fw_stats["rodando"]
-
 
 def iniciar_monitoramento(cfg: dict, parar: threading.Event,
                           session, session_lock) -> threading.Thread:
@@ -79,27 +66,23 @@ def iniciar_monitoramento(cfg: dict, parar: threading.Event,
     t.start()
     return t
 
-
 def parar_monitoramento():
     with _fw_stats_lock:
         _fw_stats["rodando"] = False
 
 # ══════════════════════════════════════════════════════════════════════════════
-# DETECÇÃO DE INTERFACES
+# DETECÇÃO AUTOMÁTICA E MAPEAMENTO (O CORAÇÃO DA CORREÇÃO)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _detectar_interfaces(cfg: dict) -> list:
     """
-    Detecta interfaces de rede reais do Linux via /sys/class/net/.
-    Considera UP: operstate == 'up' OU interface tem IP atribuído
-    (interfaces em modo PROMISC reportam operstate 'unknown' mesmo ativas).
-    Também atualiza iface_map usando interface_wan/interface_lan do wizard.
+    Detecta interfaces e gera o IFACE_MAP automaticamente para evitar
+    que as regras do Django sejam ignoradas.
     """
     interfaces = []
     try:
         for nome in sorted(os.listdir('/sys/class/net/')):
-            if nome == 'lo':
-                continue
+            if nome == 'lo': continue
             try:
                 result = subprocess.run(
                     ['ip', '-4', 'addr', 'show', nome],
@@ -116,22 +99,30 @@ def _detectar_interfaces(cfg: dict) -> list:
 
                 up = (state == 'up') or bool(ip)
                 interfaces.append({'nome': nome, 'ip': ip, 'up': up})
-            except Exception:
-                pass
-    except Exception:
-        pass
+            except Exception: pass
+    except Exception: pass
 
+    # --- AUTO MAPPING ---
+    # Puxa os nomes reais definidos no Wizard/Config
     wan = cfg.get('interface_wan', '')
     lan = cfg.get('interface_lan', '')
-    if wan or lan:
-        iface_map = dict(cfg.get('iface_map', {}))
-        if wan:
-            iface_map['WAN'] = wan
-        if lan:
-            iface_map['LAN'] = lan
-        cfg['iface_map'] = iface_map
-        salvar_config(cfg)
+    mgmt = cfg.get('interface_mgmt', '')
 
+    # Cria o dicionário que o conversor precisa
+    iface_map = {}
+    if wan: iface_map['WAN'] = wan
+    if lan: iface_map['LAN'] = lan
+    if mgmt: iface_map['MGMT'] = mgmt
+    
+    # Adiciona as interfaces físicas direto também para garantir
+    for i in interfaces:
+        iface_map[i['nome']] = i['nome']
+
+    # Salva de volta na config global para todos os módulos verem
+    cfg['iface_map'] = iface_map
+    cfg['interfaces'] = interfaces
+    salvar_config(cfg)
+    
     return interfaces
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -145,24 +136,17 @@ def _loop_firewall(cfg: dict, parar: threading.Event,
     buffer     = []
     ultimo_env = time.time()
 
-    # Heartbeat inicial — detecta interfaces e registra o sensor
-    cfg['interfaces'] = _detectar_interfaces(cfg)
+    # Heartbeat inicial e detecção (Gera o mapa aqui!)
+    _detectar_interfaces(cfg)
     _enviar(ingest_url, sensor, [], cfg, session, session_lock)
     ultimo_heartbeat = time.time()
 
-    cmd = [
-        "journalctl", "-f", "-k", "-o", "short",
-        "--grep", "MS-",
-        "--no-pager",
-    ]
+    cmd = ["journalctl", "-f", "-k", "-o", "short", "--grep", "MS-", "--no-pager"]
 
     try:
         proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            bufsize=1,
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, bufsize=1,
         )
     except FileNotFoundError:
         with _fw_stats_lock:
@@ -172,14 +156,12 @@ def _loop_firewall(cfg: dict, parar: threading.Event,
 
     try:
         while not parar.is_set():
-
-            # Heartbeat periódico — mantém last_seen atualizado no Django
             if time.time() - ultimo_heartbeat >= HEARTBEAT_INTERVAL:
+                _detectar_interfaces(cfg) # Redetecta se mudou algo
                 _enviar(ingest_url, sensor, [], cfg, session, session_lock)
                 ultimo_heartbeat = time.time()
 
             linha = proc.stdout.readline()
-
             if not linha:
                 if buffer and (time.time() - ultimo_env) >= BATCH_TIMEOUT:
                     ok = _enviar(ingest_url, sensor, buffer, cfg, session, session_lock)
@@ -196,12 +178,10 @@ def _loop_firewall(cfg: dict, parar: threading.Event,
                 continue
 
             evento = parsear_linha(linha.strip())
-            if not evento:
-                continue
+            if not evento: continue
 
             with _fw_stats_lock:
                 _fw_stats["vistos"] += 1
-                # v2: contadores por ação
                 acao = evento.get("acao", "").upper()
                 if acao in ("DROP", "DENY", "REJECT"):
                     _fw_stats["drops_sessao"] += 1
@@ -228,16 +208,9 @@ def _loop_firewall(cfg: dict, parar: threading.Event,
 
     finally:
         proc.terminate()
-        try:
-            proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-        with _fw_stats_lock:
-            _fw_stats["rodando"] = False
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ENVIO HTTP
-# ══════════════════════════════════════════════════════════════════════════════
+        try: proc.wait(timeout=3)
+        except: proc.kill()
+        with _fw_stats_lock: _fw_stats["rodando"] = False
 
 def _enviar(url: str, sensor: str, buffer: list,
             cfg: dict, session, session_lock) -> bool:
@@ -262,23 +235,19 @@ def _enviar(url: str, sensor: str, buffer: list,
                 if "token" in dados:
                     cfg["token"] = dados["token"]
                     salvar_config(cfg)
-            except Exception:
-                pass
+            except: pass
             return False
 
-        if not (200 <= resp.status_code < 300):
-            return False
+        if not (200 <= resp.status_code < 300): return False
 
         try:
             novo = resp.json().get("token", "")
             if novo and novo != cfg.get("token", ""):
                 cfg["token"] = novo
                 salvar_config(cfg)
-        except Exception:
-            pass
+        except: pass
 
         return True
-
     except Exception as e:
         with _fw_stats_lock:
             _fw_stats["ultimo"] = f"ERR:{str(e)[:28]}"
