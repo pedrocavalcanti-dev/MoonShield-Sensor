@@ -295,8 +295,10 @@ def gerar_script_nft(rules: list[dict], iface_map: dict | None = None) -> str:
         expr = regra_para_nft_inline(r, iface_map)
         if expr:
             desc = r.get("desc", "") or ""
-            comentario = f"  # [{r.get('priority', '?')}] {desc[:60]}" if desc else f"  # [{r.get('priority', '?')}]"
-            linhas.append(f"add rule inet moonshield ms_rules {expr}{comentario}")
+            prio = r.get("priority", "?")
+            # nft aceita # apenas em linha propria, nunca inline
+            linhas.append(f"# [{prio}] {desc[:80]}" if desc else f"# [{prio}]")
+            linhas.append(f"add rule inet moonshield ms_rules {expr}")
             aplicadas += 1
         else:
             logger.warning(f"[conversor] Regra ignorada (expr vazia): {r}")
