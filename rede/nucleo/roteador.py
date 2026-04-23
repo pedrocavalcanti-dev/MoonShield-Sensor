@@ -29,7 +29,7 @@ from .utilitarios import rodar, interface_existe
 def _versao_kernel() -> tuple[int, int]:
     """Retorna (major, minor) do kernel Linux."""
     try:
-        release = platform.release().split("-")[0]  # ex: "5.15.0"
+        release = platform.release().split("-")[0]
         partes  = release.split(".")
         return int(partes[0]), int(partes[1])
     except Exception:
@@ -47,20 +47,10 @@ def _iptables_disponivel() -> bool:
 
 
 def detectar_backend() -> str:
-    """
-    Detecta qual backend de firewall usar.
-    Retorna: 'nftables', 'iptables' ou 'nenhum'.
-
-    Critério:
-      - nftables: nft disponível E kernel >= 5.2
-      - iptables: nft indisponível/kernel antigo, mas iptables presente
-      - nenhum:   nada encontrado
-    """
     if _nft_disponivel():
         major, minor = _versao_kernel()
         if major > 5 or (major == 5 and minor >= 2):
             return "nftables"
-        # kernel antigo — testa se consegue criar tabela nat de verdade
         ok, _, _ = rodar(
             ["nft", "add", "table", "ip", "_teste_nat_moonshield"],
             silencioso=True,
@@ -75,12 +65,10 @@ def detectar_backend() -> str:
     return "nenhum"
 
 
-# Backend resolvido uma vez por importação do módulo
 _BACKEND: str = detectar_backend()
 
 
 def backend_ativo() -> str:
-    """Retorna o backend em uso: 'nftables', 'iptables' ou 'nenhum'."""
     return _BACKEND
 
 
@@ -103,7 +91,6 @@ def desativar_ip_forward() -> tuple[bool, str]:
 
 
 def status_ip_forward() -> str:
-    """Retorna '1', '0' ou '?'"""
     ok, val, _ = rodar(["sysctl", "net.ipv4.ip_forward"], silencioso=True)
     if ok and "=" in val:
         return val.split("=")[-1].strip()
@@ -111,7 +98,6 @@ def status_ip_forward() -> str:
 
 
 def _persistir_sysctl(chave: str, valor: str):
-    """Salva em /etc/sysctl.d/99-moonshield.conf sem duplicar a chave."""
     conf = "/etc/sysctl.d/99-moonshield.conf"
     try:
         linhas = []
@@ -127,11 +113,33 @@ def _persistir_sysctl(chave: str, valor: str):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# ROTA PADRÃO  ← NOVO
+# ══════════════════════════════════════════════════════════════════════════════
+
+def aplicar_rota_padrao(gateway: str) -> tuple[bool, str]:
+    """
+    Define o gateway padrão (rota default).
+    Usa 'replace' para não duplicar se já existir.
+    """
+    from .utilitarios import validar_ip
+    if not validar_ip(gateway):
+        return False, f"Gateway inválido: '{gateway}'"
+
+    ok, _, err = rodar(["ip", "route", "replace", "default", "via", gateway])
+    return (True, "") if ok else (False, f"Erro ao definir rota padrão: {err}")
+
+
+def remover_rota_padrao() -> tuple[bool, str]:
+    """Remove a rota padrão atual, se existir."""
+    ok, _, err = rodar(["ip", "route", "del", "default"], silencioso=True)
+    return (True, "") if ok else (False, err)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # TABELA / CHAINS — nftables
 # ══════════════════════════════════════════════════════════════════════════════
 
 def limpar_tabela() -> tuple[bool, str]:
-    """Remove regras existentes (nftables ou iptables)."""
     if _BACKEND == "nftables":
         rodar(["nft", "delete", "table", "ip", "netforge"], silencioso=True)
         return True, ""
@@ -141,7 +149,6 @@ def limpar_tabela() -> tuple[bool, str]:
 
 
 def criar_tabela() -> tuple[bool, str]:
-    """Cria tabela netforge com chains de NAT e FORWARD (só nftables)."""
     if _BACKEND != "nftables":
         return True, f"backend {_BACKEND} — sem tabela nftables necessária"
 
@@ -169,11 +176,10 @@ def criar_tabela() -> tuple[bool, str]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# NAT / MASQUERADE — despacha para o backend certo
+# NAT / MASQUERADE
 # ══════════════════════════════════════════════════════════════════════════════
 
 def aplicar_masquerade(wan: str) -> tuple[bool, str]:
-    """Adiciona MASQUERADE para a interface WAN."""
     if not interface_existe(wan):
         return False, f"Interface '{wan}' não encontrada."
 
@@ -195,14 +201,10 @@ def aplicar_masquerade(wan: str) -> tuple[bool, str]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# FORWARD — despacha para o backend certo
+# FORWARD
 # ══════════════════════════════════════════════════════════════════════════════
 
 def aplicar_forward_entre_interfaces(origem: str, destino: str) -> tuple[bool, str]:
-    """
-    FORWARD bidirecional completo entre duas interfaces internas.
-    Ex: enp0s8 ↔ enp0s9
-    """
     if not interface_existe(origem):
         return False, f"Interface '{origem}' não encontrada."
     if not interface_existe(destino):
@@ -216,10 +218,6 @@ def aplicar_forward_entre_interfaces(origem: str, destino: str) -> tuple[bool, s
 
 
 def aplicar_forward_interface_wan(lan: str, wan: str) -> tuple[bool, str]:
-    """
-    FORWARD LAN → WAN com retorno stateful (established,related).
-    Usado quando o destino é a saída para internet.
-    """
     if not interface_existe(lan):
         return False, f"Interface LAN '{lan}' não encontrada."
     if not interface_existe(wan):
@@ -233,12 +231,10 @@ def aplicar_forward_interface_wan(lan: str, wan: str) -> tuple[bool, str]:
 
 
 def aplicar_forward_vlan_wan(vlan_iface: str, wan: str) -> tuple[bool, str]:
-    """Alias de aplicar_forward_interface_wan para VLANs."""
     return aplicar_forward_interface_wan(vlan_iface, wan)
 
 
 def aplicar_forward_entre_vlans(ifaces: list[str]) -> tuple[bool, str]:
-    """FORWARD livre entre todas as interfaces da lista."""
     erros = []
     for i, a in enumerate(ifaces):
         for b in ifaces[i + 1:]:
@@ -287,7 +283,6 @@ def _nft_forward_lan_wan(lan: str, wan: str) -> tuple[bool, str]:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _iptables_flush() -> tuple[bool, str]:
-    """Limpa regras FORWARD e NAT POSTROUTING do iptables."""
     rodar(["iptables", "-t", "nat",    "-F", "POSTROUTING"], silencioso=True)
     rodar(["iptables", "-t", "filter", "-F", "FORWARD"],     silencioso=True)
     return True, ""
@@ -333,6 +328,7 @@ def aplicar_roteamento_completo(config: dict) -> list[tuple[str, bool, str]]:
 
     Campos suportados:
       wan_interface   — interface WAN (saída internet)
+      gateway         — IP do gateway padrão (ex: 10.53.52.1)  ← NOVO
       trunk_interface — interface trunk para VLANs
       vlans           — lista de {'id': 10, 'nome': 'LAN'}
       rotas_diretas   — lista de {'lan': 'enp0s9', 'wan': 'enp0s3'}
@@ -340,20 +336,26 @@ def aplicar_roteamento_completo(config: dict) -> list[tuple[str, bool, str]]:
     Retorna lista de (etapa, sucesso, mensagem).
     """
     wan           = config.get("wan_interface", "")
+    gateway       = config.get("gateway", "")          # ← NOVO
     trunk         = config.get("trunk_interface", "")
     vlans         = config.get("vlans", [])
     rotas_diretas = config.get("rotas_diretas", [])
 
     etapas: list[tuple[str, bool, str]] = []
 
-    # 0. Informa o backend em uso
+    # 0. Backend
     etapas.append(("Backend firewall", True, _BACKEND))
 
     # 1. ip_forward
     ok, err = ativar_ip_forward()
     etapas.append(("ip_forward", ok, "Ativado" if ok else err))
 
-    # 2. Limpa e recria (evita duplicatas)
+    # 2. Rota padrão  ← NOVO
+    if gateway:
+        ok, err = aplicar_rota_padrao(gateway)
+        etapas.append(("Rota padrão", ok, f"via {gateway}" if ok else err))
+
+    # 3. Limpa e recria tabela
     limpar_tabela()
     if _BACKEND == "nftables":
         ok, err = criar_tabela()
@@ -361,12 +363,12 @@ def aplicar_roteamento_completo(config: dict) -> list[tuple[str, bool, str]]:
         if not ok:
             return etapas
 
-    # 3. MASQUERADE na WAN principal
+    # 4. MASQUERADE na WAN principal
     if wan:
         ok, err = aplicar_masquerade(wan)
         etapas.append((f"MASQUERADE ({wan})", ok, "Aplicado" if ok else err))
 
-    # 4. Rotas diretas (sem VLAN)
+    # 5. Rotas diretas (sem VLAN)
     for rota in rotas_diretas:
         lan_r = rota.get("lan", "")
         wan_r = rota.get("wan", wan)
@@ -375,7 +377,7 @@ def aplicar_roteamento_completo(config: dict) -> list[tuple[str, bool, str]]:
         ok, err = aplicar_forward_interface_wan(lan_r, wan_r)
         etapas.append((f"FORWARD {lan_r}→{wan_r}", ok, "Aplicado" if ok else err))
 
-    # 5. FORWARD VLAN → WAN
+    # 6. FORWARD VLAN → WAN
     ifaces_vlan = []
     for vlan in vlans:
         vlan_iface = f"{trunk}.{vlan['id']}"
@@ -384,7 +386,7 @@ def aplicar_roteamento_completo(config: dict) -> list[tuple[str, bool, str]]:
             ok, err = aplicar_forward_vlan_wan(vlan_iface, wan)
             etapas.append((f"FORWARD {vlan_iface}↔{wan}", ok, "Aplicado" if ok else err))
 
-    # 6. FORWARD inter-VLAN
+    # 7. FORWARD inter-VLAN
     if len(ifaces_vlan) >= 2:
         ok, err = aplicar_forward_entre_vlans(ifaces_vlan)
         etapas.append(("FORWARD inter-VLAN", ok, "Aplicado" if ok else err))
@@ -397,7 +399,6 @@ def aplicar_roteamento_completo(config: dict) -> list[tuple[str, bool, str]]:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def listar_regras_nat() -> list[str]:
-    """Retorna linhas de MASQUERADE/SNAT ativas."""
     if _BACKEND == "nftables":
         ok, saida, _ = rodar(
             "nft list chain ip netforge ms_nat_post 2>/dev/null",
@@ -420,7 +421,6 @@ def listar_regras_nat() -> list[str]:
 
 
 def listar_forwards() -> list[str]:
-    """Retorna linhas de FORWARD ativas."""
     if _BACKEND == "nftables":
         ok, saida, _ = rodar(
             "nft list chain ip netforge ms_forward 2>/dev/null",
@@ -443,6 +443,5 @@ def listar_forwards() -> list[str]:
 
 
 def listar_rotas() -> list[str]:
-    """Retorna as rotas do sistema."""
     ok, saida, _ = rodar(["ip", "route", "show"], silencioso=True)
     return saida.splitlines() if ok else []
