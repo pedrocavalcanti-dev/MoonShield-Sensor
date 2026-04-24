@@ -150,7 +150,6 @@ def _configurar_interface_fisica(iface: dict):
 def _aplicar_ip_estatico(iface: dict):
     cabecalho(f"IP Estático — {iface['nome']}")
     
-    # --- AVISO À PROVA DE FALHAS ---
     print_aviso("ATENÇÃO: Só preencha o Gateway se esta for a interface de INTERNET (WAN).")
     print_aviso("Se esta for a interface da rede local (LAN), NÃO coloque gateway!")
     linha_vazia()
@@ -159,11 +158,16 @@ def _aplicar_ip_estatico(iface: dict):
     mascara = input_campo("Máscara (bits)", iface["mask"] if iface["mask"] != "—" else "24")
     
     gw_atual = gateway_padrao() or ""
-    gw       = input_campo("Gateway (Pressione ENTER p/ manter, ou digite '0' para APAGAR)", gw_atual)
-
-    # Força a limpeza do gateway se o usuário digitar 0
+    gw       = input_campo("Gateway (ENTER p/ manter, '0' para APAGAR)", gw_atual)
     if gw.strip() == "0":
         gw = ""
+
+    # ── DNS opcional ──────────────────────────────────────────
+    dns_atual = _ler_dns_atual()
+    dns       = input_campo(f"DNS (ENTER p/ manter, '0' para APAGAR)", dns_atual)
+    if dns.strip() == "0":
+        dns = ""
+    # ─────────────────────────────────────────────────────────
 
     if not ip or not validar_ip(ip):
         print_erro("IP inválido.")
@@ -186,13 +190,23 @@ def _aplicar_ip_estatico(iface: dict):
         rodar(["ip", "route", "del", "default"], silencioso=True)
         ok2, _, err2 = rodar(["ip", "route", "add", "default", "via", gw])
         if ok2:
-            print_ok(f"Gateway padrão {gw} configurado com sucesso.")
+            print_ok(f"Gateway padrão {gw} configurado.")
         else:
             print_aviso(f"Gateway não aplicado: {err2}")
     else:
-        # Garante que não sobrou lixo de rota padrão no Linux se ficou vazio
         rodar(["ip", "route", "del", "default"], silencioso=True)
-        print_info("Sem gateway configurado (Correto para rede LAN).")
+        print_info("Sem gateway configurado (correto para LAN).")
+
+    # ── Aplica DNS ────────────────────────────────────────────
+    if dns:
+        if validar_ip(dns):
+            _salvar_dns(dns)
+            print_ok(f"DNS {dns} configurado.")
+        else:
+            print_aviso(f"DNS ignorado — IP inválido: '{dns}'")
+    elif dns == "":
+        print_info("DNS não alterado.")
+    # ─────────────────────────────────────────────────────────
 
     aguardar_enter()
 
