@@ -210,7 +210,29 @@ def _aplicar_ip_estatico(iface: dict):
 
     aguardar_enter()
 
+def _ler_dns_atual() -> str:
+    """Lê o primeiro nameserver do resolv.conf."""
+    ok, saida, _ = rodar("cat /etc/resolv.conf 2>/dev/null", silencioso=True)
+    if ok:
+        for linha in saida.splitlines():
+            if linha.startswith("nameserver"):
+                return linha.split()[-1]
+    return ""
 
+
+def _salvar_dns(dns: str):
+    """Salva o DNS em /etc/resolv.conf e trava o arquivo."""
+    # Destrava antes de escrever
+    rodar(["chattr", "-i", "/etc/resolv.conf"], silencioso=True)
+    try:
+        with open("/etc/resolv.conf", "w") as f:
+            f.write(f"nameserver {dns}\n")
+        # Trava para não ser sobrescrito pelo sistema
+        rodar(["chattr", "+i", "/etc/resolv.conf"], silencioso=True)
+    except OSError as e:
+        print_aviso(f"Não foi possível salvar DNS: {e}")
+
+        
 def _aplicar_dhcp(iface: dict):
     cabecalho(f"DHCP — {iface['nome']}")
     print_info(f"Solicitando IP via DHCP em {iface['nome']}...")
