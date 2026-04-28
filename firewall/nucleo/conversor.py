@@ -3,20 +3,10 @@ firewall/nucleo/conversor.py
 ──────────────────────────────────────────────────────────────────────
 Converte dicts de regras do Django/MoonShield em comandos nft.
 
-v2 — correcoes e melhorias:
-  - IFACE_MAP_DEFAULT removido (eth0/eth1 nunca existem no lab).
-    O mapa agora e carregado do config.json do sensor automaticamente
-    via _carregar_iface_map(), com fallback para deteccao automatica
-    das interfaces reais do sistema operacional.
-  - regra_para_nft_inline() nunca retorna None — retorna string vazia
-    em casos invalidos, com log de aviso.
-  - Suporte a proto "any" gera regra sem filtro de protocolo (correto).
-  - Suporte a action "block"/"drop"/"deny" todos mapeiam para drop.
-  - Suporte a action "allow"/"accept"/"permit" todos mapeiam para accept.
-  - iface_nome vazio (any) nao gera clausula iifname — correto.
-  - gerar_script_nft() loga cada regra ignorada para facilitar debug.
-  - Nova funcao: diagnosticar_regra() — mostra passo a passo o que
-    sera gerado para uma regra, util para depuracao via CLI.
+v3 — correções e melhorias (Update Range/Forward/Log):
+  - Suporte à direção "forward" (mapeada para iifname em pacotes roteados).
+  - Suporte à flag "log" e "log_prefix" para gerar "log prefix 'MS-...'".
+  - IFACE_MAP carregado do config.json, com fallback automático.
 ──────────────────────────────────────────────────────────────────────
 """
 
@@ -147,6 +137,13 @@ def _normalizar_port(port: str) -> str:
     return p if p else "any"
 
 
+def _parece_ip_ou_cidr(valor: str) -> bool:
+    """Validacao basica: aceita IPs (v4) e CIDRs. Rejeita strings claramente invalidas."""
+    import re
+    # Aceita: 1.2.3.4, 1.2.3.4/24, 10.0.0.0/8
+    return bool(re.match(r'^\d{1,3}(\.\d{1,3}){3}(/\d{1,2})?$', valor))
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # CONVERSAO PRINCIPAL
 # ══════════════════════════════════════════════════════════════════════════════
@@ -167,7 +164,12 @@ def regra_para_nft_inline(regra: dict, iface_map: dict | None = None) -> str:
     iface_nome   = _resolver_iface(iface_logica, iface_map)
 
     if iface_nome:
-        direcao = "iifname" if str(regra.get("dir", "in")).strip().lower() == "in" else "oifname"
+        dir_val = str(regra.get("dir", "in")).strip().lower()
+        if dir_val == "out":
+            direcao = "oifname"
+        else:
+            # "in" e "forward" filtram pela interface por onde o pacote ENTRA
+            direcao = "iifname"
         partes.append(f'{direcao} "{iface_nome}"')
 
     # ── 2. IP de origem ───────────────────────────────────────────────────────
@@ -213,7 +215,22 @@ def regra_para_nft_inline(regra: dict, iface_map: dict | None = None) -> str:
 
     # proto == "any" → sem clausula de protocolo (pega tudo)
 
-    # ── 6. Acao ───────────────────────────────────────────────────────────────
+    # ── 6. Log (Gera log prefix caso ativo) ───────────────────────────────────
+    if regra.get("log", True):
+        prefixo = str(regra.get("log_prefix", "")).strip()
+        acao_str = _normalizar_acao(regra.get("action", "deny")).upper()
+        
+        # Garante que o prefixo sempre comece com MS- para o monitoramento pegar
+        if not prefixo:
+            prefixo = f"MS-{acao_str}"
+        elif "MS-" not in prefixo:
+            prefixo = f"MS-{prefixo}"
+            
+        # O kernel corta prefixos muito longos, então limitamos a ~28 chars
+        prefixo = prefixo[:26]
+        partes.append(f'log prefix "{prefixo}: "')
+
+    # ── 7. Acao ───────────────────────────────────────────────────────────────
     partes.append(_normalizar_acao(regra.get("action", "deny")))
 
     resultado = " ".join(partes)
@@ -332,16 +349,20 @@ def diagnosticar_regra(regra: dict, iface_map: dict | None = None) -> str:
     mapa_base    = _carregar_iface_map()
     mapa_final   = {**mapa_base, **(iface_map or {})}
 
+    dir_val = regra.get('dir', 'in')
+    dir_resolve = "oifname" if dir_val == "out" else "iifname"
+
     linhas.append(f"iface logica   : {iface_logica!r}")
     linhas.append(f"iface_map base : {mapa_base}")
     linhas.append(f"iface_map extra: {iface_map or {}}")
-    linhas.append(f"iface resolvida: {iface_nome!r} {'(sem clausula iifname)' if not iface_nome else ''}")
-    linhas.append(f"dir            : {regra.get('dir', 'in')!r} → {'iifname' if regra.get('dir','in')=='in' else 'oifname'}")
+    linhas.append(f"iface resolvida: {iface_nome!r} {'(sem clausula iifname/oifname)' if not iface_nome else ''}")
+    linhas.append(f"dir            : {dir_val!r} → {dir_resolve}")
     linhas.append(f"src            : {regra.get('src', 'any')!r}")
     linhas.append(f"dst            : {regra.get('dst', 'any')!r}")
     linhas.append(f"proto          : {regra.get('proto', 'any')!r} → {_normalizar_proto(regra.get('proto','any'))!r}")
     linhas.append(f"port           : {regra.get('port', 'any')!r}")
     linhas.append(f"action         : {regra.get('action', 'deny')!r} → {_normalizar_acao(regra.get('action','deny'))!r}")
+    linhas.append(f"log habilitado : {regra.get('log', True)}")
     linhas.append(f"enabled        : {regra.get('enabled', True)}")
     linhas.append("-" * 60)
 
@@ -377,14 +398,3 @@ def recarregar_config():
     """Forca recarga do config.json na proxima chamada. Util apos salvar novo config."""
     global _iface_map_cache
     _iface_map_cache = None
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# HELPERS INTERNOS
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _parece_ip_ou_cidr(valor: str) -> bool:
-    """Validacao basica: aceita IPs (v4) e CIDRs. Rejeita strings claramente invalidas."""
-    import re
-    # Aceita: 1.2.3.4, 1.2.3.4/24, 10.0.0.0/8
-    return bool(re.match(r'^\d{1,3}(\.\d{1,3}){3}(/\d{1,2})?$', valor))
